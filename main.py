@@ -20,7 +20,6 @@ STORM_API_KEY = "38223|COVoley7T1hbfcCo92qI9Wr6NSbUVcMqTTLMePNMfc29b2ec"
 BASE_URL = "https://api.storm.gift/api/v1"
 HEADERS = {"Authorization": f"Bearer {STORM_API_KEY}", "Accept": "application/json", "Content-Type": "application/json"}
 
-BATCH_SIZE = 800
 INITIAL_WAIT = 25
 POLL_INTERVAL = 8
 SELLING_PRICE = 12.0
@@ -104,7 +103,7 @@ def usa_foreign_keyboard():
         [InlineKeyboardButton("🌍 Foreign Cards", callback_data="foreign_cards")],
     ])
 
-# ====================== FORMATTER (UPDATED) ======================
+# ====================== FORMATTER ======================
 def format_live_card(raw_line: str, is_tester: bool = False) -> str:
     try:
         parts = [p.strip() for p in raw_line.replace("=>", "|").split('|')]
@@ -123,8 +122,6 @@ def format_live_card(raw_line: str, is_tester: bool = False) -> str:
         ip = get_random_ip()
         info = get_bin_info(card_number)
         base_vr = info.get("vr", 45)
-        
-        # VR randomly generated around BIN's base VR percentage
         vr = max(5, min(99, int(base_vr + random.gauss(0, 8))))
         
         bin_data = BIN_RATER.get(card_number[:6], {"rating": "N/A", "suggestion": "No rating added yet"})
@@ -390,7 +387,7 @@ async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     removed = len(all_cards) - len(filtered)
     context.user_data["all_cards"] = filtered
     await update.message.reply_text(f"✅ Removed **{removed}** card(s) ending `{last4}`.", parse_mode='Markdown')
-    await show_pre_summary(update, context)  # Note: reuse works for simplicity
+    await show_pre_summary(update, context)
     return SUMMARY
 
 async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -467,13 +464,16 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await status_msg.reply_text("✅ Done.", reply_markup=main_menu())
 
+# ====================== IMPROVED BALANCE HANDLER ======================
 async def check_balance(query, context: ContextTypes.DEFAULT_TYPE):
     try:
         r = session.get(f"{BASE_URL}/user", headers=HEADERS, timeout=15)
-        credits = r.json().get("data", {}).get("remaining_credits", "N/A")
-        await query.edit_message_text(f"💳 Storm Credits: `{credits}`", parse_mode='Markdown', reply_markup=main_menu())
-    except:
-        await query.edit_message_text("❌ Failed to get balance.", parse_mode='Markdown', reply_markup=main_menu())
+        r.raise_for_status()
+        data = r.json()
+        credits = data.get("data", {}).get("remaining_credits", "N/A")
+        await query.edit_message_text(f"💳 Storm API Credits: `{credits}`", parse_mode='Markdown', reply_markup=main_menu())
+    except Exception as e:
+        await query.edit_message_text(f"❌ Failed to fetch balance.\nError: {str(e)}", parse_mode='Markdown', reply_markup=main_menu())
 
 async def save_bin_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -517,7 +517,7 @@ def build_handler():
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(build_handler())
-    print("✅ E$CO Bot v12.5 - Compact & Improved VR System Loaded")
+    print("✅ E$CO Bot v12.6 - /start Fixed + Improved Balance")
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
