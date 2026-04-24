@@ -66,11 +66,11 @@ def get_random_balance(card_number: str, is_tester: bool = False) -> float:
     
     if is_tester:
         rand = random.random()
-        if rand < 0.85:           # 85% — Sweet spot 250-799
+        if rand < 0.85:
             return round(random.uniform(250.0, 799.0), 2)
-        elif rand < 0.95:         # 10% — High balance
+        elif rand < 0.95:
             return round(random.uniform(950.0, 2450.0), 2)
-        else:                     # 5% — Low balance
+        else:
             return round(random.uniform(25.0, 169.0), 2)
     
     min_bal = 220 + (rating * 58)
@@ -115,8 +115,8 @@ def usa_foreign_keyboard():
 # ====================== FORMATTER ======================
 def format_live_card(raw_line: str, is_tester: bool = False) -> str:
     try:
-        parts = [p.strip() for p in raw_line.split('|')]
-        card_number = parts[0]
+        parts = [p.strip() for p in raw_line.replace("=>", "|").split('|')]
+        card_number = parts[0].strip()
         expiry = parts[1] if len(parts) > 1 else "00/00"
         cvv = parts[2] if len(parts) > 2 else "000"
         name = parts[3] if len(parts) > 3 else "N/A"
@@ -167,9 +167,19 @@ def format_live_card(raw_line: str, is_tester: bool = False) -> str:
         return f"Error formatting card: {raw_line}"
 
 def is_live(item: dict) -> bool:
-    status = str(item.get("status", "")).lower()
+    """Improved detection for StormCheck response"""
+    if not isinstance(item, dict):
+        return False
+    
+    text = str(item).lower()
     response = str(item.get("response", "")).lower()
-    return any(k in (status + response) for k in ["live", "approved", "success", "00"])
+    status = str(item.get("status", "")).lower()
+    
+    if any(word in text for word in ["live", "approved", "success", "charged", "passed"]):
+        return True
+    if "live" in response or "live" in status:
+        return True
+    return False
 
 # ====================== CHECKER ======================
 CHECKING_MESSAGES = ["🔍 Live Checking Bank Status...", "💳 Checking Balance...", "📡 Validating Card..."]
@@ -189,7 +199,7 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
             data = r.json().get("data", {})
             if not batch_id:
                 batch_id = data.get("batch_id") or data.get("id") or f"TEST-{random.randint(10000,99999)}"
-        except:
+        except Exception:
             pass
 
     await status_message.edit_text("✅ Batch Submitted Successfully\nStarting Account Status + Balance Checking...\n\nPowered By StormCheck & Luxchecker")
@@ -210,17 +220,18 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
             r = session.get(poll_url, headers=HEADERS, timeout=25)
             if r.status_code == 200:
                 data = r.json().get("data") or r.json()
-                items = data.get("items") or data.get("results") or []
+                items = data.get("items") or data.get("results") or data.get("checks", []) or []
+                
                 for item in items:
                     if isinstance(item, dict):
-                        card_num = item.get("card_number") or item.get("cc")
+                        card_num = str(item.get("card_number") or item.get("cc") or item.get("card", "")).strip()
                         if card_num and card_num not in seen and is_live(item):
                             seen.add(card_num)
                             for raw in cards:
-                                if raw.startswith(card_num + "|") and raw not in live_raw_cards:
+                                if raw.split('|')[0].strip().endswith(card_num[-4:]) and raw not in live_raw_cards:
                                     live_raw_cards.append(raw)
                                     break
-        except:
+        except Exception:
             pass
 
     await asyncio.sleep(2)
@@ -229,7 +240,7 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
 # ====================== STATES ======================
 MENU, COLLECTING, USA_FOREIGN, SUMMARY, ADD_MORE_CARDS, REMOVE_LAST4, CUSTOMER_NAME, TARGET_COUNT, BIN_RATER_MODE = range(9)
 
-# ====================== START SCREEN ======================
+# ====================== START ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("Unauthorized.")
@@ -261,7 +272,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return MENU
 
-# ====================== MAIN BUTTON HANDLER ======================
 async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -294,7 +304,7 @@ async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "check_balance":
         return await check_balance(update, context)
 
-# ====================== CUSTOMER NAME & TARGET ======================
+# ====================== CUSTOMER & TARGET ======================
 async def get_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip().replace(" ", "_")
     context.user_data["customer_name"] = name
@@ -317,7 +327,7 @@ async def get_target_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Please send a valid number.")
         return TARGET_COUNT
 
-# ====================== COLLECT CARDS ======================
+# ====================== COLLECT & USA/FOREIGN ======================
 async def collect_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
         return await cancel(update, context)
@@ -343,7 +353,6 @@ async def collect_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return USA_FOREIGN
 
-# ====================== USA / FOREIGN ======================
 async def usa_foreign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -357,7 +366,6 @@ async def usa_foreign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await show_pre_summary(query, context)
     return SUMMARY
 
-# ====================== PRE SUMMARY ======================
 async def show_pre_summary(query, context: ContextTypes.DEFAULT_TYPE):
     cards = context.user_data.get("all_cards", [])
     total = len(cards)
@@ -417,7 +425,7 @@ async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.clear()
         return MENU
 
-# ====================== REMOVE BY LAST 4 ======================
+# ====================== REMOVE LAST 4 ======================
 async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last4 = update.message.text.strip()
     if len(last4) != 4 or not last4.isdigit():
@@ -425,7 +433,7 @@ async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return REMOVE_LAST4
 
     all_cards = context.user_data.get("all_cards", [])
-    filtered = [card for card in all_cards if not card.startswith("xxxx") and card.split('|')[0][-4:] != last4]
+    filtered = [card for card in all_cards if card.split('|')[0].strip()[-4:] != last4]
 
     removed = len(all_cards) - len(filtered)
     context.user_data["all_cards"] = filtered
@@ -435,7 +443,7 @@ async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text(f"❌ No card found ending with `{last4}`.", parse_mode='Markdown')
 
-    await show_pre_summary(update, context)  # Reuse function (works with Update too in this context)
+    await show_pre_summary(update, context)
     return SUMMARY
 
 # ====================== ADD MORE CARDS ======================
@@ -530,7 +538,6 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await status_msg.reply_text("✅ Operation Completed.", reply_markup=main_menu())
 
-# ====================== OTHER FUNCTIONS ======================
 async def check_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -562,7 +569,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return MENU
 
-# ====================== BUILD & RUN ======================
 def build_handler():
     return ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -584,10 +590,8 @@ def build_handler():
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(build_handler())
-    print("✅ E$CO Bot Updated Successfully!")
-    print("   → Dead cards removed from summary & checking")
-    print("   → Remove by last 4 digits added")
-    print("   → 0 live now forces add more + re-ask USA/Foreign")
+    print("✅ E$CO Bot v12.3 - Live Detection Fixed")
+    print("   → Improved StormCheck LIVE detection")
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
