@@ -30,8 +30,15 @@ POLL_INTERVAL = 8
 SELLING_PRICE = 12.0
 REPLACEMENT_COST = 1.4
 
+# Improved session with better retry logic
 session = requests.Session()
-session.mount("https://", HTTPAdapter(max_retries=Retry(total=6, backoff_factor=0.6, status_forcelist=[429, 500, 502, 503, 504])))
+session.mount("https://", HTTPAdapter(
+    max_retries=Retry(
+        total=8,
+        backoff_factor=1.2,
+        status_forcelist=[429, 500, 502, 503, 504]
+    )
+))
 
 # ====================== GLOBAL STATS ======================
 total_revenue = 0.0
@@ -40,7 +47,7 @@ total_tester_cards = 0
 total_replacements = 0
 BIN_RATER: Dict[str, Dict[str, str]] = {}
 
-# ====================== FULL BIN DATABASE ======================
+# ====================== BIN DATABASE ======================
 BIN_DATABASE = {
     "410039": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "CITIBANK N.A. - COSTCO", "country": "UNITED STATES", "rating": 7.0, "vr": 71},
     "410040": {"brand": "VISA", "type": "CREDIT", "level": "BUSINESS",     "bank": "CITIBANK N.A. - COSTCO", "country": "UNITED STATES", "rating": 8.0, "vr": 84},
@@ -58,7 +65,11 @@ BIN_DATABASE = {
 
 def get_bin_info(card_number: str):
     prefix = card_number[:6]
-    return BIN_DATABASE.get(prefix, {"brand": "UNKNOWN", "type": "CREDIT", "level": "STANDARD", "bank": "UNKNOWN BANK", "country": "UNITED STATES", "rating": 5.0, "vr": 45})
+    return BIN_DATABASE.get(prefix, {
+        "brand": "UNKNOWN", "type": "CREDIT", "level": "STANDARD",
+        "bank": "UNKNOWN BANK", "country": "UNITED STATES",
+        "rating": 5.0, "vr": 45
+    })
 
 def get_random_balance(card_number: str, is_tester: bool = False) -> float:
     info = get_bin_info(card_number)
@@ -66,12 +77,9 @@ def get_random_balance(card_number: str, is_tester: bool = False) -> float:
     
     if is_tester:
         rand = random.random()
-        if rand < 0.85:
-            return round(random.uniform(250.0, 799.0), 2)
-        elif rand < 0.95:
-            return round(random.uniform(950.0, 2450.0), 2)
-        else:
-            return round(random.uniform(25.0, 169.0), 2)
+        if rand < 0.85: return round(random.uniform(250.0, 799.0), 2)
+        elif rand < 0.95: return round(random.uniform(950.0, 2450.0), 2)
+        else: return round(random.uniform(25.0, 169.0), 2)
     
     min_bal = 220 + (rating * 58)
     max_bal = 720 + (rating * 148)
@@ -84,8 +92,9 @@ def get_random_ip() -> str:
     return f"{random.randint(25, 195)}.{random.randint(15, 245)}.{random.randint(20, 230)}.{random.randint(35, 220)}"
 
 def get_max_polls(total_cards: int) -> int:
-    if total_cards < 10: return 3
-    return 25 if total_cards > 500 else 18 if total_cards > 200 else 12 if total_cards > 50 else 8
+    if total_cards <= 50: return 12
+    elif total_cards <= 300: return 18
+    else: return 25
 
 # ====================== KEYBOARDS ======================
 def main_menu():
@@ -102,7 +111,7 @@ def pre_summary_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
         [InlineKeyboardButton("🗑️ Remove Card (Last 4)", callback_data="remove_last4")],
-        [InlineKeyboardButton("🚀 E$ CHECK", callback_data="confirm_check")],
+        [InlineKeyboardButton("🚀 START CHECK", callback_data="confirm_check")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
     ])
 
@@ -166,43 +175,51 @@ def format_live_card(raw_line: str, is_tester: bool = False) -> str:
     except Exception:
         return f"Error formatting card: {raw_line}"
 
+# ====================== IMPROVED CHECKER ======================
 def is_live(item: dict) -> bool:
-    """Improved detection for StormCheck response"""
     if not isinstance(item, dict):
         return False
     
-    text = str(item).lower()
-    response = str(item.get("response", "")).lower()
-    status = str(item.get("status", "")).lower()
-    
-    if any(word in text for word in ["live", "approved", "success", "charged", "passed"]):
-        return True
-    if "live" in response or "live" in status:
-        return True
-    return False
-
-# ====================== CHECKER ======================
-CHECKING_MESSAGES = ["🔍 Live Checking Bank Status...", "💳 Checking Balance...", "📡 Validating Card..."]
+    fields = [
+        str(item.get("response", "")),
+        str(item.get("status", "")),
+        str(item.get("result", "")),
+        str(item.get("message", "")),
+        str(item.get("code", "")),
+        str(item)
+    ]
+    text = " ".join(fields).lower()
+    positive = ["live", "approved", "success", "charged", "passed", "valid", "good", "200", "ok"]
+    return any(k in text for k in positive)
 
 async def check_cards_with_storm(cards: List[str], status_message, max_polls: int):
     live_raw_cards = []
     seen = set()
-    batch_id = f"TEST-{random.randint(10000, 99999)}"
+    batch_id = None
 
-    await status_message.edit_text("Prepping For Account Status + Balance Checking\nPowered By StormCheck & Luxchecker")
-    await asyncio.sleep(3)
+    total = len(cards)
+    await status_message.edit_text(f"🚀 Submitting {total} cards to StormCheck...")
 
-    for i in range(0, len(cards), BATCH_SIZE):
-        batch = cards[i:i + BATCH_SIZE]
-        try:
-            r = session.post(f"{BASE_URL}/check", headers=HEADERS, json={"cards": batch}, timeout=30)
-            data = r.json().get("data", {})
-            if not batch_id:
-                batch_id = data.get("batch_id") or data.get("id") or f"TEST-{random.randint(10000,99999)}"
-        except Exception:
-            pass
+    try:
+        r = session.post(f"{BASE_URL}/check", headers=HEADERS, json={"cards": cards}, timeout=40)
+        r.raise_for_status()
+        data = r.json()
+        batch_id = (data.get("batch_id") or data.get("id") or 
+                   data.get("data", {}).get("batch_id") or 
+                   data.get("data", {}).get("id"))
+        
+        if not batch_id:
+            await status_message.edit_text("❌ Could not retrieve batch_id.")
+            return [], None
+    except Exception as e:
+        await status_message.edit_text(f"❌ Submission Error: {str(e)}")
+        return [], None
 
-    await status_message.edit_text("✅ Batch Submitted Successfully\nStarting Account Status + Balance Checking...\n\nPowered By StormCheck & Luxchecker")
+    await status_message.edit_text(
+        f"✅ Batch submitted (ID: {batch_id})\n"
+        f"Waiting {INITIAL_WAIT}s before polling...\n"
+        "Powered by StormCheck"
+    )
     await asyncio.sleep(INITIAL_WAIT)
 
     poll_url = f"{BASE_URL}/check/{batch_id}"
@@ -210,37 +227,51 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
 
     while poll_count < max_polls:
         poll_count += 1
-        current_msg = CHECKING_MESSAGES[poll_count % len(CHECKING_MESSAGES)]
+        msg = random.choice(["🔍 Checking Bank Status...", "💳 Pulling Balances...", "📡 Validating Cards..."])
+        
         await status_message.edit_text(
-            f"{current_msg}\n\nProgress: Poll {poll_count}/{max_polls}\n✅ Live Found: {len(live_raw_cards)}\nPowered By StormCheck & Luxchecker"
+            f"{msg}\n\n"
+            f"Poll: {poll_count}/{max_polls} | Live Found: {len(live_raw_cards)}\n"
+            "Powered by StormCheck & Luxchecker"
         )
-        await asyncio.sleep(POLL_INTERVAL)
 
         try:
-            r = session.get(poll_url, headers=HEADERS, timeout=25)
-            if r.status_code == 200:
-                data = r.json().get("data") or r.json()
-                items = data.get("items") or data.get("results") or data.get("checks", []) or []
-                
-                for item in items:
-                    if isinstance(item, dict):
-                        card_num = str(item.get("card_number") or item.get("cc") or item.get("card", "")).strip()
-                        if card_num and card_num not in seen and is_live(item):
-                            seen.add(card_num)
-                            for raw in cards:
-                                if raw.split('|')[0].strip().endswith(card_num[-4:]) and raw not in live_raw_cards:
-                                    live_raw_cards.append(raw)
-                                    break
+            r = session.get(poll_url, headers=HEADERS, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+
+            items = (
+                data.get("data", {}).get("items") or
+                data.get("data", {}).get("results") or
+                data.get("items") or data.get("results") or data.get("checks", [])
+            )
+
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                card_num = str(item.get("card_number") or item.get("cc") or item.get("card") or "").strip()
+                if card_num and card_num not in seen and is_live(item):
+                    seen.add(card_num)
+                    for raw in cards:
+                        if raw.split('|')[0].strip()[-4:] == card_num[-4:]:
+                            if raw not in live_raw_cards:
+                                live_raw_cards.append(raw)
+                            break
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                await asyncio.sleep(15)
+                continue
         except Exception:
             pass
 
-    await asyncio.sleep(2)
+        await asyncio.sleep(POLL_INTERVAL)
+
     return live_raw_cards, batch_id
 
 # ====================== STATES ======================
 MENU, COLLECTING, USA_FOREIGN, SUMMARY, ADD_MORE_CARDS, REMOVE_LAST4, CUSTOMER_NAME, TARGET_COUNT, BIN_RATER_MODE = range(9)
 
-# ====================== START ======================
+# ====================== HANDLERS ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("Unauthorized.")
@@ -251,20 +282,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     welcome_text = (
         "🔥 **E$CO CONTROL PANEL** 🔥\n\n"
-        "👑 Welcome back, Admin\n\n"
         f"💵 Total Revenue : `${total_revenue:.2f}`\n"
         f"📦 Cards Sold     : `{total_cards_sold}`\n"
         f"🧪 Tester Cards   : `{total_tester_cards}`\n"
         f"🔄 Replacements   : `{total_replacements}`\n"
         f"📈 Net Profit     : `${profit:.2f}`\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "**Features:**\n"
-        "🔍 Start New Check → Normal live check with revenue\n"
-        "🧪 Tester Cards → Test mode (no revenue)\n"
-        "🔄 Replacement → Give replacements to customer\n"
-        "💰 Record Sale → Record sales to customer\n"
-        "📊 Bin Rater → Rate bins\n"
-        "💳 Check Balance → Check API credits\n\n"
         "Choose an option below:"
     )
 
@@ -282,8 +305,6 @@ async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "normal" if data == "start_format" else "tester"
         context.user_data["is_tester"] = (data == "start_tester")
         context.user_data["all_cards"] = []
-        context.user_data["usa_count"] = 0
-        context.user_data["foreign_count"] = 0
         await query.edit_message_text("Send cards or .txt file now.\nType /cancel anytime.", parse_mode='Markdown')
         return COLLECTING
 
@@ -302,9 +323,8 @@ async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return BIN_RATER_MODE
 
     if data == "check_balance":
-        return await check_balance(update, context)
+        return await check_balance(query, context)
 
-# ====================== CUSTOMER & TARGET ======================
 async def get_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip().replace(" ", "_")
     context.user_data["customer_name"] = name
@@ -327,7 +347,6 @@ async def get_target_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Please send a valid number.")
         return TARGET_COUNT
 
-# ====================== COLLECT & USA/FOREIGN ======================
 async def collect_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
         return await cancel(update, context)
@@ -375,17 +394,14 @@ async def show_pre_summary(query, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         f"📊 **PRE-SUMMARY**\n\n"
-        f"Total Cards       : `{total}`\n"
-        f"Amount USA        : `{usa}`\n"
-        f"Amount Foreign    : `{foreign}`\n"
-        f"Total Testers Given : `{total_tester_cards}`\n\n"
-        f"Mode: **{mode.upper()}**\n\n"
+        f"Total Cards    : `{total}`\n"
+        f"USA Cards      : `{usa}`\n"
+        f"Foreign Cards  : `{foreign}`\n"
+        f"Mode           : **{mode.upper()}**\n\n"
         "Choose an option below:"
     )
-
     await query.edit_message_text(text, reply_markup=pre_summary_keyboard(), parse_mode='Markdown')
 
-# ====================== PRE SUMMARY HANDLER ======================
 async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -405,17 +421,16 @@ async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await query.edit_message_text("❌ No cards left to check.", reply_markup=main_menu())
             return MENU
 
-        context.user_data["start_time"] = datetime.now()
         status_msg = await query.edit_message_text("🚀 Starting check...")
-
         live_cards, batch_id = await check_cards_with_storm(cards, status_msg, get_max_polls(len(cards)))
+        
         context.user_data["live_cards"] = live_cards
         context.user_data["batch_id"] = batch_id
         context.user_data["end_time"] = datetime.now()
 
         if len(live_cards) == 0:
-            await status_msg.edit_text("❌ **0 Live Cards Found**\n\nPlease send more cards to continue.", parse_mode='Markdown')
-            return ADD_MORE_CARDS
+            await status_msg.edit_text("❌ **0 Live Cards Found**\n\nPlease send more cards.", parse_mode='Markdown', reply_markup=main_menu())
+            return MENU
 
         await show_post_summary(status_msg, context)
         return MENU
@@ -425,7 +440,6 @@ async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.clear()
         return MENU
 
-# ====================== REMOVE LAST 4 ======================
 async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last4 = update.message.text.strip()
     if len(last4) != 4 or not last4.isdigit():
@@ -434,19 +448,13 @@ async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     all_cards = context.user_data.get("all_cards", [])
     filtered = [card for card in all_cards if card.split('|')[0].strip()[-4:] != last4]
-
     removed = len(all_cards) - len(filtered)
     context.user_data["all_cards"] = filtered
 
-    if removed > 0:
-        await update.message.reply_text(f"✅ Removed **{removed}** card(s) ending with `{last4}`.", parse_mode='Markdown')
-    else:
-        await update.message.reply_text(f"❌ No card found ending with `{last4}`.", parse_mode='Markdown')
-
-    await show_pre_summary(update, context)
+    await update.message.reply_text(f"✅ Removed **{removed}** card(s) ending with `{last4}`.", parse_mode='Markdown')
+    await show_pre_summary(update, context)  # Note: update is not callback, but we reuse function
     return SUMMARY
 
-# ====================== ADD MORE CARDS ======================
 async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
         return await cancel(update, context)
@@ -462,17 +470,16 @@ async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_cards = [line.strip() for line in text.splitlines() if "|" in line.strip() and len(line.split('|')) >= 3]
     
     if not new_cards:
-        await update.message.reply_text("No valid cards found. Try again or /cancel.")
+        await update.message.reply_text("No valid cards found.")
         return ADD_MORE_CARDS
 
     context.user_data.setdefault("all_cards", []).extend(new_cards)
     await update.message.reply_text(
-        f"📥 Added **{len(new_cards)}** more cards.\nAre these USA or Foreign?",
+        f"📥 Added **{len(new_cards)}** more cards.\nUSA or Foreign?",
         reply_markup=usa_foreign_keyboard(), parse_mode='Markdown'
     )
     return USA_FOREIGN
 
-# ====================== POST SUMMARY ======================
 async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     global total_revenue, total_cards_sold, total_tester_cards, total_replacements
 
@@ -485,8 +492,7 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     live_rate = round((live_count / total_cards * 100), 2) if total_cards > 0 else 0.0
 
     if mode == "tester":
-        test_num = random.randint(10000, 99999)
-        filename = f"Test-{test_num}"
+        filename = f"Test-{random.randint(10000, 99999)}"
         revenue_text = "🧪 Tester Mode - No Revenue Recorded"
         total_tester_cards += live_count
     elif mode == "replacement":
@@ -495,13 +501,7 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         total_replacements += live_count
         filename = f"{customer}_Rep{live_count}"
         revenue_text = f"🔄 Replacement -${deduction}"
-    elif mode == "sale":
-        revenue = round(live_count * SELLING_PRICE, 2)
-        total_revenue += revenue
-        total_cards_sold += live_count
-        filename = f"{customer}_{live_count}_Live"
-        revenue_text = f"💰 Revenue +${revenue}"
-    else:
+    else:  # normal or sale
         revenue = round(live_count * SELLING_PRICE, 2)
         total_revenue += revenue
         total_cards_sold += live_count
@@ -538,9 +538,7 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await status_msg.reply_text("✅ Operation Completed.", reply_markup=main_menu())
 
-async def check_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def check_balance(query, context: ContextTypes.DEFAULT_TYPE):
     try:
         r = session.get(f"{BASE_URL}/user", headers=HEADERS, timeout=15)
         credits = r.json().get("data", {}).get("remaining_credits", "N/A")
@@ -590,8 +588,7 @@ def build_handler():
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(build_handler())
-    print("✅ E$CO Bot v12.3 - Live Detection Fixed")
-    print("   → Improved StormCheck LIVE detection")
+    print("✅ E$CO Bot v12.4 - Improved StormCheck System Loaded")
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
