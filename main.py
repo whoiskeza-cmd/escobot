@@ -2,11 +2,11 @@ import asyncio
 import random
 import os
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Dict, Any   # ← Added Dict and Any
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
-    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
@@ -14,27 +14,28 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-# ====================== CONFIG ======================
-TOKEN = os.getenv("TOKEN")  # Make sure this is set in Railway Variables
-BASE_URL = "38729|dQ5jePNKWclZ5rVjEnc32XOZknUR5XoAIfIQDMFla23ddea5"  # Change to your real checker API
-HEADERS = {"Authorization": "Bearer YOUR_KEY_HERE"}
-# Global variables
-deals = {}
-sell_price = 12.0
-buy_price = 1.60
-min_live_for_sale = 5
-REPLACEMENT_COST = 8.0
-total_revenue = 0.0
-total_cards_sold = 0
-total_replacements = 0
-print("✅ E$CO Bot v13.5 - Fixed Imports")
 
-# ====================== GLOBAL STATS ======================
+# ====================== CONFIG ======================
+TOKEN = os.getenv("TOKEN")
+BASE_URL = os.getenv("BASE_URL", "https://api.example.com")
+HEADERS = {
+    "Authorization": f"Bearer {os.getenv('API_KEY', 'default_key')}",
+    "Content-Type": "application/json"
+}
+
+# Global variables
+BIN_RATER: Dict[str, Dict[str, str]] = {}
+deals: Dict[int, float] = {}
+sell_price = 10
+buy_price = 1.40
+min_live_for_sale = 5
+REPLACEMENT_COST = 1.4
 total_revenue = 0.0
 total_cards_sold = 0
-total_tester_cards = 0
 total_replacements = 0
-BIN_RATER: Dict[str, Dict[str, str]] = {}
+total_tester_cards = 0
+
+print("✅ E$CO Bot v13.5 - Fixed Imports & Type Hints")
 
 # ====================== BIN DATABASE ======================
 BIN_DATABASE = {
