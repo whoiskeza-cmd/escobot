@@ -289,6 +289,37 @@ async def usa_foreign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await show_pre_summary(query, context)
     return SUMMARY
 
+async def show_pre_summary(query, context: ContextTypes.DEFAULT_TYPE):
+    cards = context.user_data.get("all_cards", [])
+    total = len(cards)
+    usa = context.user_data.get("usa_count", total)
+    foreign = context.user_data.get("foreign_count", 0)
+    mode = context.user_data.get("mode", "normal")
+    customer = context.user_data.get("customer_name", "N/A")
+    target = context.user_data.get("target_count", 0)
+    
+    text = (
+        f"📊 **PRE-SUMMARY**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Total Cards : `{total}`\n"
+        f"USA         : `{usa}`\n"
+        f"Foreign     : `{foreign}`\n"
+        f"Mode        : **{mode.upper()}**\n"
+        f"Customer    : `{customer}`\n"
+        f"Target      : `{target}` live cards\n\n"
+        "Press **Confirm** when ready to check."
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Confirm & Start Check", callback_data="confirm_check")],
+        [InlineKeyboardButton("📝 Set Filename", callback_data="set_filename")],
+        [InlineKeyboardButton("🗑️ Remove Card (by last 4)", callback_data="remove_last4")],
+        [InlineKeyboardButton("⬅️ Cancel", callback_data="cancel")]
+    ]
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+
 async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = update.message.text.strip().replace(" ", "_")
     context.user_data["filename"] = filename
