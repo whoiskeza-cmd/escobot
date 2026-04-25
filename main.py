@@ -70,20 +70,39 @@ def get_bin_info(card_number: str):
     prefix = card_number[:6]
     return BIN_DATABASE.get(prefix, {"brand": "UNKNOWN", "type": "CREDIT", "level": "STANDARD", "bank": "UNKNOWN BANK", "country": "UNITED STATES", "rating": 5.0, "vr": 45})
 
-def get_random_balance(card_number: str, is_tester: bool = False) -> float:
-    info = get_bin_info(card_number)
-    rating = info.get("rating", 5.0)
+def get_random_balance(card: str, is_tester: bool = False) -> float:
+    """
+    Reduced probability of balance > $2500 to approximately 3.2%
+    """
+    bin6 = card[:6]
+    
+    # Base balance ranges - most cards stay under $2,500
     if is_tester:
-        rand = random.random()
-        if rand < 0.85: return round(random.uniform(250.0, 799.0), 2)
-        elif rand < 0.95: return round(random.uniform(950.0, 2450.0), 2)
-        else: return round(random.uniform(25.0, 169.0), 2)
-    min_bal = 220 + (rating * 58)
-    max_bal = 720 + (rating * 148)
-    balance = random.uniform(min_bal, max_bal)
-    if random.random() < (rating / 11.5):
-        balance = random.uniform(1350, 8500)
-    return round(min(9999.99, balance + random.uniform(0.0, 0.99)), 2)
+        return round(random.uniform(800, 1850), 2)
+    
+    # High-value bins (keep low chance of very high balances)
+    high_value_bins = ["410039", "517805", "542418", "371290"]
+    
+    if bin6 in high_value_bins:
+        # 3.2% chance of balance > 2500
+        if random.random() < 0.032:
+            return round(random.uniform(2500, 4850), 2)
+        else:
+            # 96.8% of the time: normal distribution under $2500
+            return round(random.triangular(420, 1680, 2350), 2)
+    
+    # Normal cards - very low chance of high balance
+    if random.random() < 0.032:           # 3.2% chance
+        return round(random.uniform(2510, 3790), 2)
+    else:
+        # 96.8% chance - realistic lower balances
+        roll = random.random()
+        if roll < 0.45:   # 45% chance of low balance
+            return round(random.uniform(180, 890), 2)
+        elif roll < 0.85: # 40% chance of medium balance
+            return round(random.uniform(920, 1680), 2)
+        else:             # 15% chance of higher but still under 2500
+            return round(random.uniform(1720, 2420), 2)
 
 def get_random_ip() -> str:
     return f"{random.randint(25,195)}.{random.randint(15,245)}.{random.randint(20,230)}.{random.randint(35,220)}"
