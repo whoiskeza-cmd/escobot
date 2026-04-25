@@ -2,7 +2,7 @@ import asyncio
 import random
 import os
 import requests
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -41,7 +41,7 @@ POLL_INTERVAL = 12
 
 session = requests.Session()
 
-print("✅ E$CO Bot v13.9 - Final Fixed Version")
+print("✅ E$CO Bot v14.0 - Output File Fixed + Extra Cards")
 
 # ====================== BIN DATABASE ======================
 BIN_DATABASE = {
@@ -103,7 +103,6 @@ def get_max_polls(total_cards: int) -> int:
     elif total_cards <= 300: return 18
     else: return 25
 
-# ====================== KEYBOARDS ======================
 def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔍 Normal Check", callback_data="start_format")],
@@ -130,7 +129,6 @@ def usa_foreign_keyboard():
         [InlineKeyboardButton("🌍 Foreign Cards", callback_data="foreign_cards")],
     ])
 
-# ====================== FORMATTER ======================
 def format_live_card(raw_line: str, is_tester: bool = False) -> str:
     try:
         line = raw_line.replace("=>", "|").strip()
@@ -287,41 +285,40 @@ async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     context.user_data.clear()
 
-    if data in ["start_format", "start_tester", "start_sale", "start_replacement", "sale_settings", "bin_rater", "check_balance"]:
-        if data == "start_format":
-            context.user_data["mode"] = "normal"
-            context.user_data["all_cards"] = []
-            context.user_data["filename"] = None
-            await query.edit_message_text("Send cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
-            return COLLECTING
-        if data == "start_tester":
-            context.user_data["mode"] = "tester"
-            context.user_data["all_cards"] = []
-            context.user_data["filename"] = None
-            await query.edit_message_text("Send tester cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
-            return COLLECTING
-        if data == "start_sale":
-            context.user_data["mode"] = "sale"
-            await query.edit_message_text("💰 **Sale Mode**\n\nSend Customer Name:", parse_mode='Markdown')
-            return CUSTOMER_NAME
-        if data == "start_replacement":
-            context.user_data["mode"] = "replacement"
-            await query.edit_message_text("🔄 **Replacement Mode**\n\nSend Customer Name:", parse_mode='Markdown')
-            return CUSTOMER_NAME
-        if data == "sale_settings":
-            await query.edit_message_text(
-                "⚙️ **Sale Settings**\n\n"
-                f"Buy Price : `${buy_price:.2f}`\n"
-                f"Sell Price: `${sell_price:.2f}`\n"
-                f"Min Live  : `{min_live_for_sale}`",
-                parse_mode='Markdown'
-            )
-            return REP_SETTINGS
-        if data == "bin_rater":
-            await query.edit_message_text("📊 Send BIN rating:\n`410039 8.5 Good for cashout`", parse_mode='Markdown')
-            return BIN_RATER_MODE
-        if data == "check_balance":
-            return await check_balance(query, context)
+    if data == "start_format":
+        context.user_data["mode"] = "normal"
+        context.user_data["all_cards"] = []
+        context.user_data["filename"] = None
+        await query.edit_message_text("Send cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+        return COLLECTING
+    if data == "start_tester":
+        context.user_data["mode"] = "tester"
+        context.user_data["all_cards"] = []
+        context.user_data["filename"] = None
+        await query.edit_message_text("Send tester cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+        return COLLECTING
+    if data == "start_sale":
+        context.user_data["mode"] = "sale"
+        await query.edit_message_text("💰 **Sale Mode**\n\nSend Customer Name:", parse_mode='Markdown')
+        return CUSTOMER_NAME
+    if data == "start_replacement":
+        context.user_data["mode"] = "replacement"
+        await query.edit_message_text("🔄 **Replacement Mode**\n\nSend Customer Name:", parse_mode='Markdown')
+        return CUSTOMER_NAME
+    if data == "sale_settings":
+        await query.edit_message_text(
+            "⚙️ **Sale Settings**\n\n"
+            f"Buy Price : `${buy_price:.2f}`\n"
+            f"Sell Price: `${sell_price:.2f}`\n"
+            f"Min Live  : `{min_live_for_sale}`",
+            parse_mode='Markdown'
+        )
+        return REP_SETTINGS
+    if data == "bin_rater":
+        await query.edit_message_text("📊 Send BIN rating:\n`410039 8.5 Good for cashout`", parse_mode='Markdown')
+        return BIN_RATER_MODE
+    if data == "check_balance":
+        return await check_balance(query, context)
     return MENU
 
 async def get_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -492,13 +489,16 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
 
     formatted_main = [format_live_card(raw, mode == "tester") for raw in main_cards]
     context.user_data["formatted_output"] = formatted_main
+    context.user_data["main_cards"] = main_cards
+    context.user_data["extra_cards"] = extra_cards
     context.user_data["live_count"] = len(main_cards)
     context.user_data["dead_count"] = dead_count
-    context.user_data["extra_cards"] = extra_cards
 
-    filename = context.user_data.get("filename") or f"{customer}-{len(main_cards)}"
-    final_filename = f"{filename}.txt"
+    filename_base = context.user_data.get("filename") or f"{customer}-{len(main_cards)}"
+    final_filename = f"{filename_base}.txt"
+    context.user_data["final_filename"] = final_filename
 
+    # Write main file
     with open(final_filename, "w", encoding="utf-8") as f:
         f.write("══════════════════════════════════════\n")
         f.write("          E$CO CHECK OUTPUT\n")
@@ -509,6 +509,7 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         f.write(f"Batch ID: {batch_id}\n")
         f.write("══════════════════════════════════════\n")
 
+    # Write extra file if any
     extra_filename = None
     if extra_cards:
         extra_filename = f"{batch_id}-extra-{len(extra_cards)}.txt"
@@ -535,7 +536,8 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         f"Live Rate    : `{live_rate}%`\n"
         f"Batch ID     : `{batch_id}`\n"
         f"Time         : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
-        "━━━━━━━━━━━━━━━━━━━━━━"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Click buttons below to receive files."
     )
 
     keyboard = [
@@ -553,11 +555,14 @@ async def send_output_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     data = query.data
 
     if data == "send_output_file":
-        filename = context.user_data.get("final_filename", "output.txt") or "main_output.txt"
-        formatted = context.user_data.get("formatted_output", [])
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write("\n\n".join(formatted))
-        await query.message.reply_document(document=open(filename, "rb"), caption=f"✅ Main Output: {filename}")
+        filename = context.user_data.get("final_filename")
+        if not filename or not os.path.exists(filename):
+            await query.message.reply_text("❌ Main output file not found.")
+            return
+        await query.message.reply_document(
+            document=open(filename, "rb"),
+            caption=f"✅ Main Output: {filename}"
+        )
         try: os.remove(filename)
         except: pass
 
@@ -694,12 +699,11 @@ def build_handler():
         per_message=False,
     )
 
-# ====================== START BOT ======================
 if __name__ == "__main__":
-    print("✅ E$CO Bot v13.9 Starting on Railway...")
+    print("✅ E$CO Bot v14.0 Starting on Railway...")
     
     if os.getenv("RAILWAY_ENVIRONMENT"):
-        print("🚄 Railway detected - Enforcing single instance")
+        print("🚄 Railway detected - Single instance mode")
     
     application = Application.builder().token(TOKEN).build()
     application.add_handler(build_handler())
@@ -707,6 +711,5 @@ if __name__ == "__main__":
     print("🤖 Bot is now running successfully!")
     application.run_polling(
         drop_pending_updates=True,
-        allowed_updates=["message", "callback_query"],
-        close_loop=False
+        allowed_updates=["message", "callback_query"]
     )
