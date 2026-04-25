@@ -552,44 +552,43 @@ async def send_output_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     data = query.data
-
     if data == "send_main_output":
         filename = context.user_data.get("final_filename")
         if filename and os.path.exists(filename):
-            await query.message.reply_document(
-                document=open(filename, "rb"),
-                caption=f"✅ Main Output: {filename}"
-            )
+            with open(filename, "rb") as f:
+                await query.message.reply_document(
+                    document=f,
+                    caption=f"✅ Main Output File\nCustomer: {context.user_data.get('customer_name', 'Unknown')}\nMode: {context.user_data.get('mode', 'tester').upper()}",
+                    filename=filename
+                )
             try:
                 os.remove(filename)
             except:
                 pass
+            await query.edit_message_text("✅ File sent successfully!", reply_markup=main_menu())
         else:
-            await query.message.reply_text("❌ Main output file not found.")
-
+            await query.edit_message_text("❌ Main output file not found or already sent.", reply_markup=main_menu())
     elif data == "send_extra_file":
         extra_filename = context.user_data.get("extra_filename")
         if extra_filename and os.path.exists(extra_filename):
-            await query.message.reply_document(
-                document=open(extra_filename, "rb"),
-                caption=f"✅ Extra Cards: {extra_filename}"
-            )
+            with open(extra_filename, "rb") as f:
+                await query.message.reply_document(
+                    document=f,
+                    caption="✅ Extra Cards File",
+                    filename=extra_filename
+                )
             try:
                 os.remove(extra_filename)
             except:
                 pass
         else:
-            await query.message.reply_text("No extra file found.")
-
-    elif data == "add_more":
-        await query.edit_message_text("Send more cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
-        return ADD_MORE_CARDS
-
-    elif data == "back_to_main":
+            await query.message.reply_text("❌ No extra file found.")
+    elif data in ["add_more", "back_to_main"]:
         context.user_data.clear()
         return await start(update, context)
-
-    await query.edit_message_text("✅ Action completed.", reply_markup=main_menu())
+    else:
+        await query.edit_message_text("Unknown action.", reply_markup=main_menu())
+    
     context.user_data.clear()
     return MENU
 
@@ -750,7 +749,6 @@ def build_handler():
         states={
             MENU: [
                 CallbackQueryHandler(main_button),
-                CallbackQueryHandler(send_output_handler, pattern="^(send_main_output|send_extra_file|add_more|back_to_main)$")
             ],
             COLLECTING: [MessageHandler(filters.TEXT | filters.Document.ALL, collect_cards)],
             USA_FOREIGN: [CallbackQueryHandler(usa_foreign_handler)],
