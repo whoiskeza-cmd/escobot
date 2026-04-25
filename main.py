@@ -765,4 +765,18 @@ async def main():
         await app.shutdown()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("✅ E$CO Bot v13.5 Starting on Railway...")
+    
+    # Fix for multiple instances on Railway
+    import os
+    if os.environ.get("RAILWAY_ENVIRONMENT"):
+        print("🚄 Railway detected - Using drop_pending_updates")
+    
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(build_handler())
+    
+    print("🤖 Bot is now running successfully!")
+    application.run_polling(
+        drop_pending_updates=True,   # This helps reduce conflict errors
+        allowed_updates=["message", "callback_query"]
+    )
