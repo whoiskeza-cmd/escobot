@@ -41,7 +41,7 @@ POLL_INTERVAL = 12
 
 session = requests.Session()
 
-print("✅ E$CO Bot v14.5 - Zero Live FIXED (Full Version)")
+print("✅ E$CO Bot v14.6 - Zero Live FIXED (Final)")
 
 # ====================== BIN DATABASE ======================
 BIN_DATABASE = { ... }  # ← Keep your full BIN_DATABASE from previous version here
@@ -209,8 +209,7 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
             for item in items:
                 if not isinstance(item, dict): continue
                 card_num = str(item.get("card_number") or item.get("cc") or item.get("card") or "").strip()
-                if not card_num or card_num in seen:
-                    continue
+                if not card_num or card_num in seen: continue
                 if is_live(item):
                     seen.add(card_num)
                     for raw in cards:
@@ -483,17 +482,17 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         summary_text += f"Customer    : `{customer}`\n"
         summary_text += f"Requested   : `{target}`\n"
 
-    keyboard = [
-        [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
-        [InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")]
-    ]
-
     if live_count == 0:
-        summary_text += "\n❌ **No live cards found.**"
+        summary_text += "\n❌ **No live cards found.**\n\nYou can add more cards or return to menu."
+        keyboard = [
+            [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
+            [InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")]
+        ]
         await status_msg.edit_message_text(summary_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         context.user_data.clear()
         return
 
+    # Live cards found
     main_cards = live_cards[:target] if target > 0 and live_count >= target else live_cards
     extra_cards = live_cards[target:] if target > 0 and live_count > target else []
 
@@ -520,9 +519,6 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
             f.write(f"Batch ID: {batch_id}\n\n")
             f.write("\n\n".join(formatted_extra))
         context.user_data["extra_filename"] = extra_filename
-        keyboard.insert(0, [InlineKeyboardButton("📤 Send Extra Cards File", callback_data="send_extra_file")])
-
-    keyboard.insert(0, [InlineKeyboardButton("📤 Send Main Output", callback_data="send_main_output")])
 
     if mode == "sale" and main_cards:
         global total_revenue, total_cards_sold
@@ -533,6 +529,14 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     delivered_text = f"\n✅ **{len(main_cards)} Live Card(s) Delivered**"
     if mode == "sale":
         delivered_text += f"\nCustomer : `{customer}`"
+
+    keyboard = [
+        [InlineKeyboardButton("📤 Send Main Output", callback_data="send_main_output")],
+    ]
+    if extra_cards:
+        keyboard.append([InlineKeyboardButton("📤 Send Extra Cards File", callback_data="send_extra_file")])
+    keyboard.append([InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")])
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")])
 
     final_message = summary_text + delivered_text
     await status_msg.edit_message_text(final_message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
@@ -675,7 +679,7 @@ async def add_deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: `/adddeal 3/25`")
 
 if __name__ == "__main__":
-    print("✅ E$CO Bot v14.5 Starting on Railway...")
+    print("✅ E$CO Bot v14.6 Starting on Railway...")
     if os.getenv("RAILWAY_ENVIRONMENT"):
         print("🚄 Railway detected - Single instance mode")
     
