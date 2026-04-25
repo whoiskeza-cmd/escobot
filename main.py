@@ -353,81 +353,81 @@ async def handle_live_accumulation(status_msg, context: ContextTypes.DEFAULT_TYP
         context.user_data["live_cards"] = accumulated[:]
         await show_post_summary(status_msg, context)
 async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
-    live_cards = context.user_data.get("live_cards", [])
-    all_cards = context.user_data.get("all_cards", [])
-    live_count = len(live_cards)
-    total = len(all_cards)
-    live_rate = round((live_count / total * 100), 2) if total > 0 else 0.0
-    mode = context.user_data.get("mode", "normal")
-    customer = context.user_data.get("customer_name", "N/A")
-    batch_id = context.user_data.get("batch_id", "N/A")
-    target = context.user_data.get("target_count", 0)
-    filename = context.user_data.get("filename", f"Batch-{random.randint(1000,9999)}")
-    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-
-    summary_text = (
-        f"📊 **CHECK COMPLETED**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Total Cards : `{total}`\n"
-        f"Live        : `{live_count}`\n"
-        f"Dead        : `{total - live_count}`\n"
-        f"Live Rate   : `{live_rate}%`\n"
-        f"Filename    : `{filename}`\n"
-        f"Time Checked: `{now}`\n"
-        f"Batch ID    : `{batch_id}`\n"
-    )
+    """This function runs after check_cards_with_storm finishes.
+    It decides what to show to the user based on accumulated live cards."""
     
-    if mode == "sale":
-        summary_text += f"Customer    : `{customer}`\n"
-        summary_text += f"Requested   : `{target}`\n"
-
-    main_cards = live_cards[:target] if target > 0 and live_count >= target else live_cards
-    extra_cards = live_cards[target:] if target > 0 and live_count > target else []
-
+    accumulated_live = context.user_data.get("accumulated_live", [])
+    total_live = len(accumulated_live)
+    
+    mode = context.user_data.get("mode", "normal")
+    target = context.user_data.get("target_count", 0)
+    customer = context.user_data.get("customer_name", "Unknown")
+    filename_base = context.user_data.get("filename", f"ESCO_Batch_{datetime.now().strftime('%Y%m%d_%H%M')}")
+    # Split into main delivery and extra cards (only in sale/replacement mode)
+    if mode in ["sale", "replacement"] and target > 0:
+        main_cards = accumulated_live[:target]
+        extra_cards = accumulated_live[target:]
+    else:
+        main_cards = accumulated_live
+        extra_cards = []
+    # Save to context so other handlers can access them
     context.user_data["main_cards"] = main_cards
     context.user_data["extra_cards"] = extra_cards
-    context.user_data["final_filename"] = f"{filename}.txt"
-
+    context.user_data["final_filename"] = f"{filename_base}.txt"
+    # Format the cards nicely
     formatted_main = [format_live_card(raw, mode == "tester") for raw in main_cards]
+    # Create the main output file
     with open(context.user_data["final_filename"], "w", encoding="utf-8") as f:
         f.write("══════════════════════════════════════\n")
-        f.write("          E$CO CHECK OUTPUT\n")
+        f.write("             E$CO CHECK OUTPUT\n")
         f.write("══════════════════════════════════════\n\n")
         f.write("\n\n".join(formatted_main))
         f.write("\n\n══════════════════════════════════════\n")
-        f.write(f"Customer: {customer} | Requested: {target} | Delivered: {len(main_cards)}\n")
-        f.write(f"Batch ID: {batch_id}\n")
+        f.write(f"Customer   : {customer}\n")
+        f.write(f"Target     : {target}\n")
+        f.write(f"Delivered  : {len(main_cards)}\n")
+        f.write(f"Total Live : {total_live}\n")
+        f.write(f"Time       : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
         f.write("══════════════════════════════════════\n")
-
+    # Create extra file if there are extra live cards
+    extra_filename = None
     if extra_cards:
-        extra_filename = f"{batch_id}-extra-{len(extra_cards)}.txt"
+        extra_filename = f"{filename_base}_EXTRA_{len(extra_cards)}.txt"
         formatted_extra = [format_live_card(raw, mode == "tester") for raw in extra_cards]
         with open(extra_filename, "w", encoding="utf-8") as f:
-            f.write(f"EXTRA LIVE CARDS — {len(extra_cards)} cards\n")
-            f.write(f"Batch ID: {batch_id}\n\n")
+            f.write(f"EXTRA LIVE CARDS — {len(extra_cards)} cards\n\n")
             f.write("\n\n".join(formatted_extra))
         context.user_data["extra_filename"] = extra_filename
-
+    # Update global sales statistics
     if mode == "sale" and main_cards:
         global total_revenue, total_cards_sold
         revenue = round(len(main_cards) * sell_price, 2)
         total_revenue += revenue
         total_cards_sold += len(main_cards)
-
-    delivered_text = f"\n✅ **{len(main_cards)} Live Card(s) Delivered**"
-    if mode == "sale":
-        delivered_text += f"\nCustomer : `{customer}`"
-
+    # Build the message the user sees
+    summary_text = (
+        f"✅ **TARGET REACHED SUCCESSFULLY**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Total Live Cards : `{total_live}`\n"
+        f"Delivered        : `{len(main_cards)}`\n"
+        f"Extra Cards      : `{len(extra_cards)}`\n"
+        f"Customer         : `{customer}`\n"
+        f"Mode             : `{mode.upper()}`\n"
+        f"Time             : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}`\n\n"
+        "What would you like to do next?"
+    )
+    # Build buttons
     keyboard = [
-        [InlineKeyboardButton("📤 Send Main Output", callback_data="send_main_output")],
+        [InlineKeyboardButton("📤 Send Main Output File", callback_data="send_main_output")],
     ]
     if extra_cards:
         keyboard.append([InlineKeyboardButton("📤 Send Extra Cards File", callback_data="send_extra_file")])
-    keyboard.append([InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")])
-    keyboard.append([InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")])
-
-    final_message = summary_text + delivered_text
-    await status_msg.edit_message_text(final_message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    
+    keyboard.extend([
+        [InlineKeyboardButton("➕ Add More Cards (New Batch)", callback_data="add_more")],
+        [InlineKeyboardButton("🏠 Back to Main Menu", callback_data="back_to_main")]
+    ])
+    await status_msg.edit_text(summary_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 # ====================== ALL OTHER HANDLERS (UNCHANGED) ======================
 async def send_output_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -507,26 +507,33 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====================== STATES ======================
 MENU, COLLECTING, USA_FOREIGN, SUMMARY, ADD_MORE_CARDS, REMOVE_LAST4, BIN_RATER_MODE, FILENAME, CUSTOMER_NAME, TARGET_COUNT, REP_SETTINGS = range(11)
 
-async def show_pre_summary(query, context: ContextTypes.DEFAULT_TYPE):
-    cards = context.user_data.get("all_cards", [])
-    total = len(cards)
-    usa = context.user_data.get("usa_count", 0)
-    foreign = context.user_data.get("foreign_count", 0)
-    mode = context.user_data.get("mode", "normal")
-    filename = context.user_data.get("filename", "Not Set")
-    customer = context.user_data.get("customer_name", "N/A")
-    
-    text = f"📊 **PRE-SUMMARY**\n\n"
-    text += f"Total    : `{total}`\n"
-    text += f"USA      : `{usa}` | Foreign : `{foreign}`\n"
-    text += f"Mode     : **{mode.upper()}**\n"
-    text += f"Filename : `{filename}`\n"
-    text += f"Time     : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
-    if mode == "sale":
-        text += f"Customer : `{customer}`\n"
-    text += "\nSelect:"
-    
-    await query.edit_message_text(text, reply_markup=pre_summary_keyboard(), parse_mode='Markdown')
+async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data == "add_more":
+        await query.edit_message_text("Send more cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+        return ADD_MORE_CARDS
+    if data == "set_filename":
+        await query.edit_message_text("Send the desired filename (without .txt):", parse_mode='Markdown')
+        return FILENAME
+    if data == "remove_last4":
+        await query.edit_message_text("🗑️ Send last 4 digits of the card you want to remove:", parse_mode='Markdown')
+        return REMOVE_LAST4
+    if data == "confirm_check":
+        cards = context.user_data.get("all_cards", [])
+        if not cards:
+            await query.edit_message_text("❌ No cards to check.", reply_markup=main_menu())
+            return MENU
+        
+        status_msg = await query.edit_message_text("🚀 Starting E$ CHECK...")
+        max_polls = get_max_polls(len(cards))
+        await check_cards_with_storm(cards, status_msg, max_polls, context)
+        return MENU
+    if data == "cancel":
+        await query.edit_message_text("✅ Operation cancelled.", reply_markup=main_menu())
+        context.user_data.clear()
+        return MENU
 
 async def show_pre_summary_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cards = context.user_data.get("all_cards", [])
@@ -537,15 +544,16 @@ async def show_pre_summary_from_message(update: Update, context: ContextTypes.DE
     filename = context.user_data.get("filename", "Not Set")
     customer = context.user_data.get("customer_name", "N/A")
     
-    text = f"📊 **PRE-SUMMARY**\n\n"
-    text += f"Total    : `{total}`\n"
-    text += f"USA      : `{usa}` | Foreign : `{foreign}`\n"
-    text += f"Mode     : **{mode.upper()}**\n"
-    text += f"Filename : `{filename}`\n"
-    text += f"Time     : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
-    if mode == "sale":
-        text += f"Customer : `{customer}`\n"
-    text += "\nSelect:"
+    text = (
+        f"📊 **PRE-SUMMARY**\n\n"
+        f"Total    : `{total}`\n"
+        f"USA      : `{usa}` | Foreign : `{foreign}`\n"
+        f"Mode     : **{mode.upper()}**\n"
+        f"Filename : `{filename}`\n"
+        f"Customer : `{customer}`\n"
+        f"Time     : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC`\n\n"
+        "Select an option:"
+    )
     
     await update.message.reply_text(text, reply_markup=pre_summary_keyboard(), parse_mode='Markdown')
 
