@@ -41,7 +41,7 @@ POLL_INTERVAL = 12
 
 session = requests.Session()
 
-print("✅ E$CO Bot v14.3 - Fixed Send File + Add More Cards")
+print("✅ E$CO Bot v14.3 - Fixed 0 Live + Dual Post Summary")
 
 # ====================== BIN DATABASE ======================
 BIN_DATABASE = { ... }  # ← Keep your full BIN_DATABASE from previous version here
@@ -363,10 +363,20 @@ async def show_pre_summary(query, context: ContextTypes.DEFAULT_TYPE):
     foreign = context.user_data.get("foreign_count", 0)
     mode = context.user_data.get("mode", "normal")
     filename = context.user_data.get("filename", "Not Set")
-    text = (f"📊 **PRE-SUMMARY**\n\n"
-            f"Total : `{total}` | USA : `{usa}` | Foreign : `{foreign}`\n"
-            f"Mode  : **{mode.upper()}**\n"
-            f"Filename : `{filename}`\n\nSelect:")
+    customer = context.user_data.get("customer_name", "N/A")
+    
+    text = f"📊 **PRE-SUMMARY**\n\n"
+    text += f"Total    : `{total}`\n"
+    text += f"USA      : `{usa}` | Foreign : `{foreign}`\n"
+    text += f"Mode     : **{mode.upper()}**\n"
+    text += f"Filename : `{filename}`\n"
+    text += f"Time     : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
+    
+    if mode == "sale":
+        text += f"Customer : `{customer}`\n"
+    
+    text += "\nSelect:"
+    
     await query.edit_message_text(text, reply_markup=pre_summary_keyboard(), parse_mode='Markdown')
 
 async def show_pre_summary_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -376,10 +386,20 @@ async def show_pre_summary_from_message(update: Update, context: ContextTypes.DE
     foreign = context.user_data.get("foreign_count", 0)
     mode = context.user_data.get("mode", "normal")
     filename = context.user_data.get("filename", "Not Set")
-    text = (f"📊 **PRE-SUMMARY**\n\n"
-            f"Total : `{total}` | USA : `{usa}` | Foreign : `{foreign}`\n"
-            f"Mode  : **{mode.upper()}**\n"
-            f"Filename : `{filename}`\n\nSelect:")
+    customer = context.user_data.get("customer_name", "N/A")
+    
+    text = f"📊 **PRE-SUMMARY**\n\n"
+    text += f"Total    : `{total}`\n"
+    text += f"USA      : `{usa}` | Foreign : `{foreign}`\n"
+    text += f"Mode     : **{mode.upper()}**\n"
+    text += f"Filename : `{filename}`\n"
+    text += f"Time     : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
+    
+    if mode == "sale":
+        text += f"Customer : `{customer}`\n"
+    
+    text += "\nSelect:"
+    
     await update.message.reply_text(text, reply_markup=pre_summary_keyboard(), parse_mode='Markdown')
 
 async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -445,21 +465,49 @@ async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return USA_FOREIGN
 
 async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
-    global total_revenue, total_cards_sold, total_tester_cards, total_replacements
     live_cards = context.user_data.get("live_cards", [])
     all_cards = context.user_data.get("all_cards", [])
     live_count = len(live_cards)
-    dead_count = len(all_cards) - live_count
-    target = context.user_data.get("target_count", 0)
+    total = len(all_cards)
+    live_rate = round((live_count / total * 100), 2) if total > 0 else 0.0
     mode = context.user_data.get("mode", "normal")
-    customer = context.user_data.get("customer_name", "Unknown")
+    customer = context.user_data.get("customer_name", "N/A")
     batch_id = context.user_data.get("batch_id", "N/A")
-    live_rate = round((live_count / len(all_cards) * 100), 2) if all_cards else 0.0
+    target = context.user_data.get("target_count", 0)
+    filename = context.user_data.get("filename", "Not Set")
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
+    # === VERSION 1: Before cards are given (Detailed Stats) ===
+    pre_text = (
+        f"📊 **CHECK COMPLETED**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Total Cards : `{total}`\n"
+        f"Live        : `{live_count}`\n"
+        f"Dead        : `{total - live_count}`\n"
+        f"Live Rate   : `{live_rate}%`\n"
+        f"Filename    : `{filename}`\n"
+        f"Time Checked: `{now} UTC`\n"
+    )
+    
+    if mode == "sale":
+        pre_text += f"Customer    : `{customer}`\n"
+        pre_text += f"Requested   : `{target}`\n"
+    
+    pre_text += f"Batch ID    : `{batch_id}`\n"
+    pre_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+
+    if live_count == 0:
+        pre_text += "❌ **No live cards found.**\n\n"
+        keyboard = [
+            [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
+            [InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")]
+        ]
+        await status_msg.edit_message_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        return
+
+    # If we have live cards, show Version 1 then proceed to file creation
     main_cards = live_cards[:target] if target > 0 and live_count > target else live_cards
     extra_cards = live_cards[target:] if target > 0 and live_count > target else []
-
-    formatted_main = [format_live_card(raw, mode == "tester") for raw in main_cards]
 
     if not context.user_data.get("filename"):
         if mode == "tester":
@@ -471,9 +519,11 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
 
     final_filename = f"{context.user_data['filename']}.txt"
     context.user_data["final_filename"] = final_filename
-    context.user_data["formatted_output"] = formatted_main
     context.user_data["extra_cards"] = extra_cards
+    context.user_data["main_cards"] = main_cards
 
+    # Write main file
+    formatted_main = [format_live_card(raw, mode == "tester") for raw in main_cards]
     with open(final_filename, "w", encoding="utf-8") as f:
         f.write("══════════════════════════════════════\n")
         f.write("          E$CO CHECK OUTPUT\n")
@@ -484,6 +534,7 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         f.write(f"Batch ID: {batch_id}\n")
         f.write("══════════════════════════════════════\n")
 
+    # Write extra file if any
     extra_filename = None
     if extra_cards:
         extra_filename = f"{batch_id}-extra-{len(extra_cards)}.txt"
@@ -496,23 +547,22 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
 
     if mode == "sale" and main_cards:
         revenue = round(len(main_cards) * sell_price, 2)
+        global total_revenue, total_cards_sold
         total_revenue += revenue
         total_cards_sold += len(main_cards)
 
+    # === VERSION 2: After cards are sent (Simplified) ===
     post_text = (
-        f"📊 **POST SUMMARY**\n"
+        f"✅ **Cards Delivered**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Customer     : `{customer}`\n"
-        f"Target       : `{target}`\n"
-        f"Live Cards   : `{live_count}`\n"
-        f"Delivered    : `{len(main_cards)}`\n"
-        f"Extra Cards  : `{len(extra_cards)}`\n"
-        f"Live Rate    : `{live_rate}%`\n"
-        f"Batch ID     : `{batch_id}`\n"
-        f"Time         : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Click buttons below to receive files."
+        f"Total     : `{total}`\n"
+        f"Live Rate : `{live_rate}%`\n"
+        f"Time      : `{now} UTC`\n"
     )
+    if mode == "sale":
+        post_text += f"Customer  : `{customer}`\n"
+    
+    post_text += "━━━━━━━━━━━━━━━━━━━━━━"
 
     keyboard = [
         [InlineKeyboardButton("📤 Send Main Output", callback_data="send_main_output")],
@@ -522,7 +572,7 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     keyboard.append([InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")])
     keyboard.append([InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")])
 
-    await status_msg.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    await status_msg.edit_message_text(pre_text + "\n" + post_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def send_output_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
