@@ -517,70 +517,51 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     live_rate = round((live_count / total_cards * 100), 2) if total_cards > 0 else 0.0
     est_time = (datetime.utcnow() - timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S EST")
     filename = context.user_data.get("filename") or f"Output-{random.randint(1000,9999)}"
-    if mode in ["sale", "replacement"]:
-        if live_count < target:
-            post_text = (
-                f"📊 **POST SUMMARY**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"Customer : `{customer}`\n"
-                f"Target   : `{target}`\n"
-                f"Live     : `{live_count}`\n"
-                f"Dead     : `{dead_count}`\n"
-                f"Live Rate: `{live_rate}%`\n"
-                f"Status   : `❌ Target Not Reached`\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
-            )
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📤 Send File Anyway", callback_data="send_file_anyway")],
-                [InlineKeyboardButton("🔄 Check Again", callback_data="confirm_check")],
-                [InlineKeyboardButton("⬅️ Main Menu", callback_data="back_to_main")]
-            ])
-            await status_msg.edit_text(post_text, reply_markup=keyboard, parse_mode='Markdown')
-            context.user_data["live_cards"] = live_cards  # Save for later
-            return SUMMARY
-    # If we reach here, either normal mode or target was reached
-    if mode == "sale":
-        revenue = round(live_count * sell_price, 2)
-        total_revenue += revenue
-        total_cards_sold += live_count
-        revenue_text = f"💰 Sale Revenue: ${revenue:.2f}"
-    elif mode == "replacement":
-        deduction = round(live_count * REPLACEMENT_COST, 2)
-        total_revenue = round(total_revenue - deduction, 2)
-        total_replacements += live_count
-        revenue_text = f"🔄 Replacements: {live_count}"
-    else:
-        revenue_text = "Normal Check Complete"
     final_filename = f"{filename}.txt"
+    # Save formatted output for later
     formatted = [format_live_card(raw, mode == "tester") for raw in live_cards]
-    with open(final_filename, "w", encoding="utf-8") as f:
-        f.write("══════════════════════════════════════\n")
-        f.write("          E$CO CHECK OUTPUT\n")
-        f.write("══════════════════════════════════════\n\n")
-        f.write("\n\n".join(formatted))
-        f.write("\n\n══════════════════════════════════════\n")
-        f.write(f"Customer: {customer} | Target: {target}\n")
-        f.write(f"Live: {live_count} | Dead: {dead_count} | Rate: {live_rate}%\n")
-        f.write(f"Time: {est_time}\n")
-        f.write("══════════════════════════════════════\n")
+    context.user_data["formatted_output"] = formatted
+    context.user_data["final_filename"] = final_filename
+    if mode in ["sale", "replacement"] and live_count < target:
+        status = "❌ Target Not Reached"
+        color = "🔴"
+    else:
+        status = "✅ Target Reached"
+        color = "🟢"
+        if mode == "sale":
+            revenue = round(live_count * sell_price, 2)
+            total_revenue += revenue
+            total_cards_sold += live_count
+            revenue_text = f"💰 Revenue: ${revenue:.2f}"
+        elif mode == "replacement":
+            deduction = round(live_count * REPLACEMENT_COST, 2)
+            total_revenue = round(total_revenue - deduction, 2)
+            total_replacements += live_count
+            revenue_text = f"🔄 Replacements Done"
+        else:
+            revenue_text = ""
     post_text = (
-        "📊 **POST SUMMARY**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Customer : `{customer}`\n"
-        f"Target   : `{target}`\n"
-        f"Live     : `{live_count}`\n"
-        f"Dead     : `{dead_count}`\n"
-        f"Live Rate: `{live_rate}%`\n"
+        f"📊 **POST SUMMARY**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Customer     : `{customer}`\n"
+        f"Target       : `{target}`\n"
+        f"Live Cards   : `{live_count}`\n"
+        f"Dead Cards   : `{dead_count}`\n"
+        f"Live Rate    : `{live_rate}%`\n"
+        f"Status       : {color} {status}\n"
         f"{revenue_text}\n"
-        f"Filename : `{final_filename}`\n"
-        "━━━━━━━━━━━━━━━━━━━━━━"
+        f"Batch ID     : `{batch_id}`\n"
+        f"Time (EST)   : `{est_time}`\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Output file is ready. Use button below to download."
     )
-    await status_msg.edit_text(post_text, parse_mode='Markdown')
-    await status_msg.reply_document(document=open(final_filename, "rb"), caption=final_filename)
-    try: os.remove(final_filename)
-    except: pass
-    await status_msg.reply_text("**Check Completed Successfully**", parse_mode='Markdown', reply_markup=main_menu())
-    context.user_data.clear()
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📤 Send Output File", callback_data="send_output_file")],
+        [InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")]
+    ])
+    await status_msg.edit_text(post_text, reply_markup=keyboard, parse_mode='Markdown')
+    context.user_data["live_count"] = live_count
+    context.user_data["dead_count"] = dead_count
 
 async def check_balance(query, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -682,6 +663,38 @@ async def post_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return MENU
     if data == "back_to_main":
         return await start(update, context)
+
+async def send_output_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "send_output_file":
+        formatted = context.user_data.get("formatted_output", [])
+        final_filename = context.user_data.get("final_filename", "output.txt")
+        if not formatted:
+            await query.edit_message_text("❌ No output available.")
+            return
+        with open(final_filename, "w", encoding="utf-8") as f:
+            f.write("══════════════════════════════════════\n")
+            f.write("          E$CO CHECK OUTPUT\n")
+            f.write("══════════════════════════════════════\n\n")
+            f.write("\n\n".join(formatted))
+            f.write("\n\n══════════════════════════════════════\n")
+            f.write(f"Customer: {context.user_data.get('customer_name', 'Unknown')}\n")
+            f.write(f"Live: {context.user_data.get('live_count', 0)} | Dead: {context.user_data.get('dead_count', 0)}\n")
+            f.write("══════════════════════════════════════\n")
+        await query.message.reply_document(
+            document=open(final_filename, "rb"),
+            caption=f"✅ {final_filename}"
+        )
+        try:
+            os.remove(final_filename)
+        except:
+            pass
+        await query.edit_message_text("✅ Output file sent successfully.", reply_markup=main_menu())
+        context.user_data.clear()
+        return MENU
+    if query.data == "back_to_main":
+        return await start(update, context)
         
 def build_handler():
     return ConversationHandler(
@@ -689,7 +702,7 @@ def build_handler():
         states={
             SUMMARY: [
     CallbackQueryHandler(pre_summary_handler),
-    CallbackQueryHandler(post_summary_handler)   # Add this line
+    CallbackQueryHandler(send_output_handler)   # ← Add this
 ],
             MENU: [CallbackQueryHandler(main_button)],
             COLLECTING: [MessageHandler(filters.TEXT | filters.Document.ALL, collect_cards)],
