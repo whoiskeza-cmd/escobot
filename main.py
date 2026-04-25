@@ -267,23 +267,27 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
 async def get_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip().replace(" ", "_")
     context.user_data["customer_name"] = name
-    mode = context.user_data.get("mode", "normal")
-    text = f"✅ Customer: **{name}**\n\n"
+    mode = context.user_data.get("mode")
     if mode == "sale":
-        text += "How many **LIVE** cards? (number)"
+        await update.message.reply_text(f"✅ Customer: **{name}**\n\nHow many **LIVE** cards do they want?", parse_mode='Markdown')
+        return TARGET_COUNT
+    elif mode == "replacement":
+        await update.message.reply_text(f"✅ Customer: **{name}**\n\nHow many replacements do they want?", parse_mode='Markdown')
+        return TARGET_COUNT
     else:
-        text += "How many replacements? (number)"
-    await update.message.reply_text(text, parse_mode='Markdown')
-    return TARGET_COUNT
-
+        context.user_data["all_cards"] = []
+        context.user_data["filename"] = None
+        await update.message.reply_text("Send cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+        return COLLECTING
+        
 async def get_target_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        count = int(update.message.text.strip())
-        context.user_data["target_count"] = count
-        await update.message.reply_text("✅ Target saved.\nSend cards or .txt file.", parse_mode='Markdown')
+        target = int(update.message.text.strip())
+        context.user_data["target_count"] = target
+        await update.message.reply_text(f"✅ Target set to **{target}** live cards.\n\nSend cards or .txt file.", parse_mode='Markdown')
         return COLLECTING
     except:
-        await update.message.reply_text("❌ Invalid number.")
+        await update.message.reply_text("❌ Please send a valid number.")
         return TARGET_COUNT
 
 # ====================== STATES ======================
@@ -334,37 +338,26 @@ async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return COLLECTING
     if data == "start_sale":
         context.user_data["mode"] = "sale"
-        context.user_data["all_cards"] = []
-        context.user_data["filename"] = None
-        context.user_data["target_count"] = 5  # Default minimum for sale
-        await query.edit_message_text("💰 **Sale Mode Activated**\n\nSend cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
-        return COLLECTING
+        await query.edit_message_text("💰 **Sale Mode**\n\nSend Customer Name:", parse_mode='Markdown')
+        return CUSTOMER_NAME
+    if data == "start_replacement":
+        context.user_data["mode"] = "replacement"
+        await query.edit_message_text("🔄 **Replacement Mode**\n\nSend Customer Name:", parse_mode='Markdown')
+        return CUSTOMER_NAME
     if data == "sale_settings":
         await query.edit_message_text(
             "⚙️ **Sale Settings**\n\n"
-            f"Current Buy Price: `${context.bot_data.get('buy_price', 1.6):.2f}` per card\n"
-            f"Current Sell Price: `${context.bot_data.get('sell_price', 12.0):.2f}` per card\n"
-            f"Minimum Live Cards: `{context.bot_data.get('min_live_for_sale', 5)}`\n\n"
-            "Use commands:\n"
-            "`/setbuy 2.0` - Set buy price\n"
-            "`/setsell 15` - Set sell price\n"
-            "`/setmin 3` - Set minimum live cards required\n"
-            "`/adddeal 3/25` - Add deal (e.g. 3 for $25)\n"
-            "`/adddeal 5/55` - Add another deal",
+            f"Buy Price : `${context.bot_data.get('buy_price', 1.6):.2f}`\n"
+            f"Sell Price: `${context.bot_data.get('sell_price', 12.0):.2f}`\n"
+            f"Min Live  : `{context.bot_data.get('min_live_for_sale', 5)}`",
             parse_mode='Markdown'
         )
         return REP_SETTINGS
-    if data == "start_replacement":
-        await query.edit_message_text("🔄 **E$ Replacement Menu**", reply_markup=replacement_menu(), parse_mode='Markdown')
-        return MENU
     if data == "bin_rater":
         await query.edit_message_text("📊 Send BIN rating:\n`410039 8.5 Good for cashout`", parse_mode='Markdown')
         return BIN_RATER_MODE
     if data == "check_balance":
         return await check_balance(query, context)
-    if data == "set_filename":
-        await query.edit_message_text("Send the desired filename (without .txt):", parse_mode='Markdown')
-        return FILENAME
         
 async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = update.message.text.strip().replace(" ", "_")
@@ -511,50 +504,53 @@ async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return USA_FOREIGN
 
 async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
-    global total_revenue, total_cards_sold, total_tester_cards, total_replacements, sell_price, buy_price
+    global total_revenue, total_cards_sold, total_tester_cards, total_replacements
     live_cards = context.user_data.get("live_cards", [])
+    all_cards = context.user_data.get("all_cards", [])
     live_count = len(live_cards)
-    total_cards = len(context.user_data.get("all_cards", []))
+    dead_count = len(all_cards) - live_count
+    total_cards = len(all_cards)
     mode = context.user_data.get("mode", "normal")
+    customer = context.user_data.get("customer_name", "Unknown")
+    target = context.user_data.get("target_count", 0)
     batch_id = context.user_data.get("batch_id", "N/A")
     live_rate = round((live_count / total_cards * 100), 2) if total_cards > 0 else 0.0
     est_time = (datetime.utcnow() - timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S EST")
     filename = context.user_data.get("filename") or f"Output-{random.randint(1000,9999)}"
-    if mode == "sale":
-        min_required = context.bot_data.get('min_live_for_sale', 5)
-        
-        if live_count < min_required:
-            await status_msg.edit_text(
-                f"❌ **Sale Requirement Not Met**\n\n"
-                f"Live Cards: `{live_count}`/{min_required}\n"
-                f"You need at least **{min_required}** live cards to get output in Sale mode.",
-                parse_mode='Markdown',
-                reply_markup=main_menu()
+    if mode in ["sale", "replacement"]:
+        if live_count < target:
+            post_text = (
+                f"📊 **POST SUMMARY**\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Customer : `{customer}`\n"
+                f"Target   : `{target}`\n"
+                f"Live     : `{live_count}`\n"
+                f"Dead     : `{dead_count}`\n"
+                f"Live Rate: `{live_rate}%`\n"
+                f"Status   : `❌ Target Not Reached`\n"
+                "━━━━━━━━━━━━━━━━━━━━━━"
             )
-            context.user_data.clear()
-            return MENU
-        # Calculate price based on deals first, then fallback to sell_price
-        final_price = sell_price
-        for count, price in sorted(deals.items(), reverse=True):
-            if live_count >= count:
-                final_price = price / count
-                break
-        revenue = round(live_count * final_price, 2)
-        cost = round(live_count * buy_price, 2)
-        profit = round(revenue - cost, 2)
-        
-        total_revenue += revenue
-        total_cards_sold += live_count
-        revenue_text = f"💰 Sale: +${revenue:.2f} (Profit: ${profit:.2f})"
-        
-    elif mode == "tester":
-        revenue_text = "🧪 Tester Mode"
-        total_tester_cards += live_count
-    else:
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📤 Send File Anyway", callback_data="send_file_anyway")],
+                [InlineKeyboardButton("🔄 Check Again", callback_data="confirm_check")],
+                [InlineKeyboardButton("⬅️ Main Menu", callback_data="back_to_main")]
+            ])
+            await status_msg.edit_text(post_text, reply_markup=keyboard, parse_mode='Markdown')
+            context.user_data["live_cards"] = live_cards  # Save for later
+            return SUMMARY
+    # If we reach here, either normal mode or target was reached
+    if mode == "sale":
         revenue = round(live_count * sell_price, 2)
         total_revenue += revenue
         total_cards_sold += live_count
-        revenue_text = f"💰 +${revenue:.2f}"
+        revenue_text = f"💰 Sale Revenue: ${revenue:.2f}"
+    elif mode == "replacement":
+        deduction = round(live_count * REPLACEMENT_COST, 2)
+        total_revenue = round(total_revenue - deduction, 2)
+        total_replacements += live_count
+        revenue_text = f"🔄 Replacements: {live_count}"
+    else:
+        revenue_text = "Normal Check Complete"
     final_filename = f"{filename}.txt"
     formatted = [format_live_card(raw, mode == "tester") for raw in live_cards]
     with open(final_filename, "w", encoding="utf-8") as f:
@@ -563,25 +559,27 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         f.write("══════════════════════════════════════\n\n")
         f.write("\n\n".join(formatted))
         f.write("\n\n══════════════════════════════════════\n")
-        f.write("E$CO Post Summary Attached\n")
-        f.write(f"Time Checked (EST): {est_time}\n")
+        f.write(f"Customer: {customer} | Target: {target}\n")
+        f.write(f"Live: {live_count} | Dead: {dead_count} | Rate: {live_rate}%\n")
+        f.write(f"Time: {est_time}\n")
         f.write("══════════════════════════════════════\n")
     post_text = (
         "📊 **POST SUMMARY**\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Batch   : `{batch_id}`\n"
-        f"Total   : `{total_cards}` | Live : `{live_count}` ({live_rate}%)\n"
-        f"Mode    : **{mode.upper()}**\n"
+        f"Customer : `{customer}`\n"
+        f"Target   : `{target}`\n"
+        f"Live     : `{live_count}`\n"
+        f"Dead     : `{dead_count}`\n"
+        f"Live Rate: `{live_rate}%`\n"
         f"{revenue_text}\n"
-        f"Filename: `{final_filename}`\n"
-        f"Time Checked (EST): `{est_time}`\n"
+        f"Filename : `{final_filename}`\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
     await status_msg.edit_text(post_text, parse_mode='Markdown')
     await status_msg.reply_document(document=open(final_filename, "rb"), caption=final_filename)
     try: os.remove(final_filename)
     except: pass
-    await status_msg.reply_text("**E$ Check Has Successfully Completed**", parse_mode='Markdown', reply_markup=main_menu())
+    await status_msg.reply_text("**Check Completed Successfully**", parse_mode='Markdown', reply_markup=main_menu())
     context.user_data.clear()
 
 async def check_balance(query, context: ContextTypes.DEFAULT_TYPE):
@@ -664,10 +662,35 @@ async def add_deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("Usage: `/adddeal 3/25` or `/adddeal 5/55`")
         return
+
+async def post_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data == "send_file_anyway":
+        live_cards = context.user_data.get("live_cards", [])
+        filename = f"Partial_Output-{random.randint(1000,9999)}.txt"
+        formatted = [format_live_card(raw) for raw in live_cards]
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write("\n\n".join(formatted))
+        await query.edit_message_text("📤 Sending partial file...")
+        await query.message.reply_document(document=open(filename, "rb"), caption=filename)
+        try: os.remove(filename)
+        except: pass
+        await query.message.reply_text("✅ Partial file sent.", reply_markup=main_menu())
+        context.user_data.clear()
+        return MENU
+    if data == "back_to_main":
+        return await start(update, context)
+        
 def build_handler():
     return ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
+            SUMMARY: [
+    CallbackQueryHandler(pre_summary_handler),
+    CallbackQueryHandler(post_summary_handler)   # Add this line
+],
             MENU: [CallbackQueryHandler(main_button)],
             COLLECTING: [MessageHandler(filters.TEXT | filters.Document.ALL, collect_cards)],
             USA_FOREIGN: [CallbackQueryHandler(usa_foreign_handler)],
