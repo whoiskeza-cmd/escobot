@@ -35,16 +35,16 @@ total_tester_cards = 0
 total_replacements = 0
 BIN_RATER: Dict[str, Dict[str, str]] = {}
 
-# ====================== BIN DATABASE (UPDATED & EXPANDED) ======================
+# ====================== BIN DATABASE ======================
 BIN_DATABASE = {
     "192051": {"brand": "UATP", "type": "CREDIT", "level": "UATP", "bank": "LUFTHANSA AIRPLUS SERVICEKARTEN GMBH", "country": "GERMANY", "rating": 6.0, "vr": 55},
-    "371290": {"brand": "AMERICAN EXPRESS", "type": "CREDIT", "level": "PERSONAL", "bank": "AMERICAN EXPRESS US CONSUMER", "country": "UNITED STATES", "rating": 5.5, "vr": 88},
+    "371290": {"brand": "AMERICAN EXPRESS", "type": "CREDIT", "level": "PERSONAL", "bank": "AMERICAN EXPRESS US CONSUMER", "country": "UNITED STATES", "rating": 8.5, "vr": 88},
     "400022": {"brand": "DINERS CLUB INTERNATIONAL", "type": "CREDIT", "level": "BUSINESS", "bank": "DINERS CLUB", "country": "UNITED STATES", "rating": 5.5, "vr": 52},
     "400895": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "NAVY FEDERAL CREDIT UNION", "country": "UNITED STATES", "rating": 7.8, "vr": 79},
-    "410039": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "CITIBANK, N.A. - COSTCO", "country": "UNITED STATES", "rating": 6.2, "vr": 84},
-    "410040": {"brand": "VISA", "type": "CREDIT", "level": "BUSINESS", "bank": "CITIBANK, N.A. - COSTCO", "country": "UNITED STATES", "rating": 7.0, "vr": 82},
+    "410039": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "CITIBANK, N.A. - COSTCO", "country": "UNITED STATES", "rating": 8.2, "vr": 84},
+    "410040": {"brand": "VISA", "type": "CREDIT", "level": "BUSINESS", "bank": "CITIBANK, N.A. - COSTCO", "country": "UNITED STATES", "rating": 8.0, "vr": 82},
     "423904": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "ARVEST BANK", "country": "UNITED STATES", "rating": 6.5, "vr": 68},
-    "426684": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "JPMORGAN CHASE BANK N.A.", "country": "UNITED STATES", "rating": 3.0, "vr": 72},
+    "426684": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "JPMORGAN CHASE BANK N.A.", "country": "UNITED STATES", "rating": 7.0, "vr": 72},
     "434256": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "WELLS FARGO BANK, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 6.8, "vr": 70},
     "434769": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "JPMORGAN CHASE BANK N.A. - DEBIT", "country": "UNITED STATES", "rating": 7.5, "vr": 77},
     "440215": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "TTCU FEDERAL CREDIT UNION", "country": "UNITED STATES", "rating": 6.0, "vr": 62},
@@ -54,20 +54,14 @@ BIN_DATABASE = {
     "474485": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "BANK OF AMERICA, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 8.0, "vr": 81},
     "475833": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "CHOICE FINANCIAL GROUP", "country": "UNITED STATES", "rating": 6.2, "vr": 64},
     "482821": {"brand": "VISA", "type": "CREDIT", "level": "SIGNATURE", "bank": "THE BANCORP BANK, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 7.8, "vr": 80},
-    "483312": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "JPMORGAN CHASE BANK N.A. - DEBIT", "country": "UNITED STATES", "rating": 4.3, "vr": 75},
-    "483316": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "JPMORGAN CHASE BANK N.A. - DEBIT", "country": "UNITED STATES", "rating": 2.3, "vr": 75},
     "498503": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "STRIDE BANK, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 6.8, "vr": 69},
-    "513379": {"brand": "MASTERCARD", "type": "DEBIT", "level": "STANDARD", "bank": "BANQUE FEDERATIVE DU CREDIT MUTUEL (BFCM)", "country": "FRANCE", "rating": 8.5, "vr": 58},
-    "514616": {"brand": "MASTERCARD", "type": "DEBIT", "level": "ENHANCED", "bank": "WOODFOREST NATIONAL BANK", "country": "UNITED STATES", "rating": 7.0, "vr": 73},
-    "517805": {"brand": "MASTERCARD", "type": "CREDIT", "level": "WORLD", "bank": "CAPITAL ONE, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 8.1, "vr": 83},
-    "521403": {"brand": "MASTERCARD", "type": "DEBIT", "level": "PREPAID GOVERNMENT", "bank": "COMERICA BANK", "country": "UNITED STATES", "rating": 6.0, "vr": 61},
-    "521729": {"brand": "MASTERCARD", "type": "DEBIT", "level": "STANDARD", "bank": "COMMONWEALTH BANK OF AUSTRALIA", "country": "AUSTRALIA", "rating": 6.5, "vr": 67},
+    "513379": {"brand": "MASTERCARD", "type": "DEBIT", "level": "STANDARD", "bank": "BANQUE FEDERATIVE DU CREDIT MUTUEL", "country": "FRANCE", "rating": 5.5, "vr": 58},
+    "517805": {"brand": "MASTERCARD", "type": "CREDIT", "level": "WORLD", "bank": "CAPITAL ONE", "country": "UNITED STATES", "rating": 8.1, "vr": 83},
     "522535": {"brand": "MASTERCARD", "type": "DEBIT", "level": "ENHANCED", "bank": "PROVIDENT BANK", "country": "UNITED STATES", "rating": 7.2, "vr": 74},
-    "527515": {"brand": "MASTERCARD", "type": "DEBIT", "level": "ENHANCED", "bank": "BANK OF AMERICA, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 7.9, "vr": 81},
-    "534348": {"brand": "MASTERCARD", "type": "CREDIT", "level": "PLATINUM", "bank": "CELTIC BANK CORPORATION", "country": "UNITED STATES", "rating": 5.5, "vr": 78},
-    "542418": {"brand": "MASTERCARD", "type": "CREDIT", "level": "PLATINUM", "bank": "CITIBANK N.A.", "country": "UNITED STATES", "rating": 6.0, "vr": 82},
+    "527515": {"brand": "MASTERCARD", "type": "DEBIT", "level": "ENHANCED", "bank": "BANK OF AMERICA", "country": "UNITED STATES", "rating": 7.9, "vr": 81},
+    "534348": {"brand": "MASTERCARD", "type": "CREDIT", "level": "PLATINUM", "bank": "CELTIC BANK CORPORATION", "country": "UNITED STATES", "rating": 7.5, "vr": 78},
+    "542418": {"brand": "MASTERCARD", "type": "CREDIT", "level": "PLATINUM", "bank": "CITIBANK N.A.", "country": "UNITED STATES", "rating": 8.0, "vr": 82},
 }
-
 def get_bin_info(card_number: str):
     prefix = card_number[:6]
     return BIN_DATABASE.get(prefix, {"brand": "UNKNOWN", "type": "CREDIT", "level": "STANDARD", "bank": "UNKNOWN BANK", "country": "UNITED STATES", "rating": 5.0, "vr": 45})
