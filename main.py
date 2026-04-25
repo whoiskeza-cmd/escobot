@@ -28,7 +28,7 @@ HEADERS = {
 # ====================== GLOBAL VARIABLES ======================
 BIN_RATER: Dict[str, Dict[str, str]] = {}
 deals: Dict[int, float] = {}
-sell_price = 10
+sell_price = 10.0
 buy_price = 1.40
 min_live_for_sale = 5
 REPLACEMENT_COST = 1.4
@@ -36,14 +36,12 @@ total_revenue = 0.0
 total_cards_sold = 0
 total_replacements = 0
 total_tester_cards = 0
-VR_PERCENTAGE = 75
-FORMAT_STYLE = "pipe"
 INITIAL_WAIT = 8
 POLL_INTERVAL = 12
 
 session = requests.Session()
 
-print("✅ E$CO Bot v13.8 - Fixed + Extra Cards Feature")
+print("✅ E$CO Bot v13.9 - Final Fixed Version")
 
 # ====================== BIN DATABASE ======================
 BIN_DATABASE = {
@@ -289,43 +287,193 @@ async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     context.user_data.clear()
 
-    if data == "start_format":
-        context.user_data["mode"] = "normal"
-        context.user_data["all_cards"] = []
-        context.user_data["filename"] = None
-        await query.edit_message_text("Send cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
-        return COLLECTING
-    if data == "start_tester":
-        context.user_data["mode"] = "tester"
-        context.user_data["all_cards"] = []
-        context.user_data["filename"] = None
-        await query.edit_message_text("Send tester cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
-        return COLLECTING
-    if data == "start_sale":
-        context.user_data["mode"] = "sale"
-        await query.edit_message_text("💰 **Sale Mode**\n\nSend Customer Name:", parse_mode='Markdown')
-        return CUSTOMER_NAME
-    if data == "start_replacement":
-        context.user_data["mode"] = "replacement"
-        await query.edit_message_text("🔄 **Replacement Mode**\n\nSend Customer Name:", parse_mode='Markdown')
-        return CUSTOMER_NAME
-    if data == "sale_settings":
-        await query.edit_message_text(
-            "⚙️ **Sale Settings**\n\n"
-            f"Buy Price : `${buy_price:.2f}`\n"
-            f"Sell Price: `${sell_price:.2f}`\n"
-            f"Min Live  : `{min_live_for_sale}`",
-            parse_mode='Markdown'
-        )
-        return REP_SETTINGS
-    if data == "bin_rater":
-        await query.edit_message_text("📊 Send BIN rating:\n`410039 8.5 Good for cashout`", parse_mode='Markdown')
-        return BIN_RATER_MODE
-    if data == "check_balance":
-        return await check_balance(query, context)
+    if data in ["start_format", "start_tester", "start_sale", "start_replacement", "sale_settings", "bin_rater", "check_balance"]:
+        if data == "start_format":
+            context.user_data["mode"] = "normal"
+            context.user_data["all_cards"] = []
+            context.user_data["filename"] = None
+            await query.edit_message_text("Send cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+            return COLLECTING
+        if data == "start_tester":
+            context.user_data["mode"] = "tester"
+            context.user_data["all_cards"] = []
+            context.user_data["filename"] = None
+            await query.edit_message_text("Send tester cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+            return COLLECTING
+        if data == "start_sale":
+            context.user_data["mode"] = "sale"
+            await query.edit_message_text("💰 **Sale Mode**\n\nSend Customer Name:", parse_mode='Markdown')
+            return CUSTOMER_NAME
+        if data == "start_replacement":
+            context.user_data["mode"] = "replacement"
+            await query.edit_message_text("🔄 **Replacement Mode**\n\nSend Customer Name:", parse_mode='Markdown')
+            return CUSTOMER_NAME
+        if data == "sale_settings":
+            await query.edit_message_text(
+                "⚙️ **Sale Settings**\n\n"
+                f"Buy Price : `${buy_price:.2f}`\n"
+                f"Sell Price: `${sell_price:.2f}`\n"
+                f"Min Live  : `{min_live_for_sale}`",
+                parse_mode='Markdown'
+            )
+            return REP_SETTINGS
+        if data == "bin_rater":
+            await query.edit_message_text("📊 Send BIN rating:\n`410039 8.5 Good for cashout`", parse_mode='Markdown')
+            return BIN_RATER_MODE
+        if data == "check_balance":
+            return await check_balance(query, context)
     return MENU
 
-# ... [All your other handler functions remain exactly the same until show_post_summary] ...
+async def get_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = update.message.text.strip().replace(" ", "_")
+    context.user_data["customer_name"] = name
+    mode = context.user_data.get("mode")
+    if mode == "sale":
+        await update.message.reply_text(f"✅ Customer: **{name}**\n\nHow many **LIVE** cards do they want?", parse_mode='Markdown')
+        return TARGET_COUNT
+    elif mode == "replacement":
+        await update.message.reply_text(f"✅ Customer: **{name}**\n\nHow many replacements do they want?", parse_mode='Markdown')
+        return TARGET_COUNT
+    else:
+        context.user_data["all_cards"] = []
+        context.user_data["filename"] = None
+        await update.message.reply_text("Send cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+        return COLLECTING
+
+async def get_target_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        target = int(update.message.text.strip())
+        context.user_data["target_count"] = target
+        await update.message.reply_text(f"✅ Target set to **{target}** live cards.\n\nSend cards or .txt file.", parse_mode='Markdown')
+        return COLLECTING
+    except:
+        await update.message.reply_text("❌ Please send a valid number.")
+        return TARGET_COUNT
+
+async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    filename = update.message.text.strip().replace(" ", "_")
+    context.user_data["filename"] = filename
+    await update.message.reply_text(f"✅ Filename set to: **{filename}.txt**", parse_mode='Markdown')
+    await show_pre_summary_from_message(update, context)
+    return SUMMARY
+
+async def collect_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
+        return await start(update, context)
+
+    text = ""
+    if update.message.document:
+        file = await update.message.document.get_file()
+        content = await file.download_as_bytearray()
+        text = content.decode("utf-8", errors="ignore")
+    else:
+        text = update.message.text or ""
+
+    new_cards = [line.strip() for line in text.splitlines() if "|" in line.strip() and len(line.split('|')) >= 3]
+    if not new_cards:
+        await update.message.reply_text("No valid cards found.")
+        return COLLECTING
+
+    context.user_data.setdefault("all_cards", []).extend(new_cards)
+    await update.message.reply_text(f"📥 Added **{len(new_cards)}** cards.\nUSA or Foreign?", reply_markup=usa_foreign_keyboard(), parse_mode='Markdown')
+    return USA_FOREIGN
+
+async def usa_foreign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "usa_cards":
+        context.user_data["usa_count"] = len(context.user_data.get("all_cards", []))
+        context.user_data["foreign_count"] = 0
+    else:
+        context.user_data["usa_count"] = 0
+        context.user_data["foreign_count"] = len(context.user_data.get("all_cards", []))
+    await show_pre_summary(query, context)
+    return SUMMARY
+
+async def show_pre_summary(query, context: ContextTypes.DEFAULT_TYPE):
+    cards = context.user_data.get("all_cards", [])
+    total = len(cards)
+    usa = context.user_data.get("usa_count", 0)
+    foreign = context.user_data.get("foreign_count", 0)
+    mode = context.user_data.get("mode", "normal")
+    filename = context.user_data.get("filename", "Not Set")
+    text = (f"📊 **PRE-SUMMARY**\n\n"
+            f"Total : `{total}` | USA : `{usa}` | Foreign : `{foreign}`\n"
+            f"Mode  : **{mode.upper()}**\n"
+            f"Filename : `{filename}`\n\nSelect:")
+    await query.edit_message_text(text, reply_markup=pre_summary_keyboard(), parse_mode='Markdown')
+
+async def show_pre_summary_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cards = context.user_data.get("all_cards", [])
+    total = len(cards)
+    usa = context.user_data.get("usa_count", 0)
+    foreign = context.user_data.get("foreign_count", 0)
+    mode = context.user_data.get("mode", "normal")
+    filename = context.user_data.get("filename", "Not Set")
+    text = (f"📊 **PRE-SUMMARY**\n\n"
+            f"Total : `{total}` | USA : `{usa}` | Foreign : `{foreign}`\n"
+            f"Mode  : **{mode.upper()}**\n"
+            f"Filename : `{filename}`\n\nSelect:")
+    await update.message.reply_text(text, reply_markup=pre_summary_keyboard(), parse_mode='Markdown')
+
+async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "add_more":
+        await query.edit_message_text("Send more cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+        return ADD_MORE_CARDS
+    if data == "set_filename":
+        await query.edit_message_text("Send the desired filename (without .txt):", parse_mode='Markdown')
+        return FILENAME
+    if data == "remove_last4":
+        await query.edit_message_text("🗑️ Send last 4 digits to remove:", parse_mode='Markdown')
+        return REMOVE_LAST4
+    if data == "confirm_check":
+        cards = context.user_data.get("all_cards", [])
+        if not cards:
+            await query.edit_message_text("❌ No cards.", reply_markup=main_menu())
+            return MENU
+        status_msg = await query.edit_message_text("🚀 Starting E$ CHECK...")
+        max_polls = get_max_polls(len(cards))
+        await check_cards_with_storm(cards, status_msg, max_polls, context)
+        return MENU
+    if data == "cancel":
+        await query.edit_message_text("✅ Cancelled.", reply_markup=main_menu())
+        context.user_data.clear()
+        return MENU
+
+async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    last4 = update.message.text.strip()
+    if len(last4) != 4 or not last4.isdigit():
+        await update.message.reply_text("❌ Send exactly 4 digits.")
+        return REMOVE_LAST4
+    all_cards = context.user_data.get("all_cards", [])
+    filtered = [c for c in all_cards if not c.split('|')[0].strip().endswith(last4)]
+    removed = len(all_cards) - len(filtered)
+    context.user_data["all_cards"] = filtered
+    await update.message.reply_text(f"✅ Removed **{removed}** card(s) ending `{last4}`.", parse_mode='Markdown')
+    await show_pre_summary_from_message(update, context)
+    return SUMMARY
+
+async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
+        return await start(update, context)
+    text = ""
+    if update.message.document:
+        file = await update.message.document.get_file()
+        content = await file.download_as_bytearray()
+        text = content.decode("utf-8", errors="ignore")
+    else:
+        text = update.message.text or ""
+    new_cards = [line.strip() for line in text.splitlines() if "|" in line.strip() and len(line.split('|')) >= 3]
+    if not new_cards:
+        await update.message.reply_text("No valid cards.")
+        return ADD_MORE_CARDS
+    context.user_data.setdefault("all_cards", []).extend(new_cards)
+    await update.message.reply_text(f"📥 Added **{len(new_cards)}** more.\nUSA or Foreign?", reply_markup=usa_foreign_keyboard(), parse_mode='Markdown')
+    return USA_FOREIGN
 
 async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     global total_revenue, total_cards_sold, total_tester_cards, total_replacements
@@ -405,7 +553,7 @@ async def send_output_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     data = query.data
 
     if data == "send_output_file":
-        filename = context.user_data.get("final_filename", "output.txt")
+        filename = context.user_data.get("final_filename", "output.txt") or "main_output.txt"
         formatted = context.user_data.get("formatted_output", [])
         with open(filename, "w", encoding="utf-8") as f:
             f.write("\n\n".join(formatted))
@@ -428,128 +576,6 @@ async def send_output_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_text("✅ Files sent successfully.", reply_markup=main_menu())
     context.user_data.clear()
     return MENU
-
-# ====================== REMAINING FUNCTIONS (All kept) ======================
-async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    filename = update.message.text.strip().replace(" ", "_")
-    context.user_data["filename"] = filename
-    await update.message.reply_text(f"✅ Filename set to: **{filename}.txt**", parse_mode='Markdown')
-    await show_pre_summary_from_message(update, context)
-    return SUMMARY
-
-async def collect_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
-        return await start(update, context)
-    text = ""
-    if update.message.document:
-        file = await update.message.document.get_file()
-        content = await file.download_as_bytearray()
-        text = content.decode("utf-8", errors="ignore")
-    else:
-        text = update.message.text or ""
-    new_cards = [line.strip() for line in text.splitlines() if "|" in line.strip() and len(line.split('|')) >= 3]
-    if not new_cards:
-        await update.message.reply_text("No valid cards found.")
-        return COLLECTING
-    context.user_data.setdefault("all_cards", []).extend(new_cards)
-    await update.message.reply_text(f"📥 Added **{len(new_cards)}** cards.\nUSA or Foreign?", reply_markup=usa_foreign_keyboard(), parse_mode='Markdown')
-    return USA_FOREIGN
-
-async def usa_foreign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "usa_cards":
-        context.user_data["usa_count"] = len(context.user_data.get("all_cards", []))
-        context.user_data["foreign_count"] = 0
-    else:
-        context.user_data["usa_count"] = 0
-        context.user_data["foreign_count"] = len(context.user_data.get("all_cards", []))
-    await show_pre_summary(query, context)
-    return SUMMARY
-
-async def show_pre_summary(query, context: ContextTypes.DEFAULT_TYPE):
-    cards = context.user_data.get("all_cards", [])
-    total = len(cards)
-    usa = context.user_data.get("usa_count", 0)
-    foreign = context.user_data.get("foreign_count", 0)
-    mode = context.user_data.get("mode", "normal")
-    filename = context.user_data.get("filename", "Not Set")
-    text = (f"📊 **PRE-SUMMARY**\n\n"
-            f"Total : `{total}` | USA : `{usa}` | Foreign : `{foreign}`\n"
-            f"Mode  : **{mode.upper()}**\n"
-            f"Filename : `{filename}`\n\nSelect:")
-    await query.edit_message_text(text, reply_markup=pre_summary_keyboard(), parse_mode='Markdown')
-
-async def show_pre_summary_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cards = context.user_data.get("all_cards", [])
-    total = len(cards)
-    usa = context.user_data.get("usa_count", 0)
-    foreign = context.user_data.get("foreign_count", 0)
-    mode = context.user_data.get("mode", "normal")
-    filename = context.user_data.get("filename", "Not Set")
-    text = (f"📊 **PRE-SUMMARY**\n\n"
-            f"Total : `{total}` | USA : `{usa}` | Foreign : `{foreign}`\n"
-            f"Mode  : **{mode.upper()}**\n"
-            f"Filename : `{filename}`\n\nSelect:")
-    await update.message.reply_text(text, reply_markup=pre_summary_keyboard(), parse_mode='Markdown')
-
-async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    if data == "add_more":
-        await query.edit_message_text("Send more cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
-        return ADD_MORE_CARDS
-    if data == "set_filename":
-        await query.edit_message_text("Send the desired filename (without .txt):", parse_mode='Markdown')
-        return FILENAME
-    if data == "remove_last4":
-        await query.edit_message_text("🗑️ Send last 4 digits to remove:", parse_mode='Markdown')
-        return REMOVE_LAST4
-    if data == "confirm_check":
-        cards = context.user_data.get("all_cards", [])
-        if not cards:
-            await query.edit_message_text("❌ No cards.", reply_markup=main_menu())
-            return MENU
-        status_msg = await query.edit_message_text("🚀 Starting E$ CHECK...")
-        max_polls = get_max_polls(len(cards))
-        await check_cards_with_storm(cards, status_msg, max_polls, context)
-        return MENU
-    if data == "cancel":
-        await query.edit_message_text("✅ Cancelled.", reply_markup=main_menu())
-        context.user_data.clear()
-        return MENU
-
-async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    last4 = update.message.text.strip()
-    if len(last4) != 4 or not last4.isdigit():
-        await update.message.reply_text("❌ Send exactly 4 digits.")
-        return REMOVE_LAST4
-    all_cards = context.user_data.get("all_cards", [])
-    filtered = [c for c in all_cards if not c.split('|')[0].strip().endswith(last4)]
-    removed = len(all_cards) - len(filtered)
-    context.user_data["all_cards"] = filtered
-    await update.message.reply_text(f"✅ Removed **{removed}** card(s) ending `{last4}`.", parse_mode='Markdown')
-    await show_pre_summary_from_message(update, context)
-    return SUMMARY
-
-async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
-        return await start(update, context)
-    text = ""
-    if update.message.document:
-        file = await update.message.document.get_file()
-        content = await file.download_as_bytearray()
-        text = content.decode("utf-8", errors="ignore")
-    else:
-        text = update.message.text or ""
-    new_cards = [line.strip() for line in text.splitlines() if "|" in line.strip() and len(line.split('|')) >= 3]
-    if not new_cards:
-        await update.message.reply_text("No valid cards.")
-        return ADD_MORE_CARDS
-    context.user_data.setdefault("all_cards", []).extend(new_cards)
-    await update.message.reply_text(f"📥 Added **{len(new_cards)}** more.\nUSA or Foreign?", reply_markup=usa_foreign_keyboard(), parse_mode='Markdown')
-    return USA_FOREIGN
 
 async def check_balance(query, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -664,16 +690,16 @@ def build_handler():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_chat=True,
-        per_user=False,           # Changed to fix the warning
+        per_user=False,
         per_message=False,
     )
 
 # ====================== START BOT ======================
 if __name__ == "__main__":
-    print("✅ E$CO Bot v13.8 Starting on Railway...")
+    print("✅ E$CO Bot v13.9 Starting on Railway...")
     
     if os.getenv("RAILWAY_ENVIRONMENT"):
-        print("🚄 Railway detected - Single instance mode enforced")
+        print("🚄 Railway detected - Enforcing single instance")
     
     application = Application.builder().token(TOKEN).build()
     application.add_handler(build_handler())
