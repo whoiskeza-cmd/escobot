@@ -319,6 +319,43 @@ async def show_pre_summary(query, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
+async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "confirm_check":
+        cards = context.user_data.get("all_cards", [])
+        if not cards:
+            await query.edit_message_text("❌ No cards found.", reply_markup=main_menu())
+            return MENU
+        
+        status_msg = await query.edit_message_text("🚀 Starting check with Storm API...\nPlease wait.")
+        max_polls = 30  # You can adjust this
+        await check_cards_with_storm(cards, status_msg, max_polls, context)
+        return MENU
+
+    elif data == "set_filename":
+        await query.edit_message_text("Please send the desired filename (without .txt):")
+        return FILENAME
+
+    elif data == "remove_last4":
+        await query.edit_message_text("🗑️ Send the last 4 digits of the card you want to remove:")
+        return REMOVE_LAST4
+
+    elif data == "add_more":
+        await query.edit_message_text("Send more cards or upload a .txt file.\nType /cancel to stop.")
+        return ADD_MORE_CARDS
+
+    elif data == "cancel":
+        await query.edit_message_text("✅ Operation cancelled.", reply_markup=main_menu())
+        context.user_data.clear()
+        return MENU
+
+    else:
+        await query.edit_message_text("Unknown option.", reply_markup=main_menu())
+        return MENU
+
 
 async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = update.message.text.strip().replace(" ", "_")
