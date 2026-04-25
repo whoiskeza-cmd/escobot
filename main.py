@@ -358,7 +358,17 @@ async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = update.message.text.strip().replace(" ", "_").replace(".txt", "")
+    if not filename:
+        filename = f"ESCO_Batch_{datetime.now().strftime('%Y%m%d_%H%M')}"
+    
     context.user_data["filename"] = filename
+    
+    await update.message.reply_text(
+        f"✅ Filename set to: **`{filename}.txt`**",
+        parse_mode='Markdown'
+    )
+    await show_pre_summary_from_message(update, context)
+    return SUMMARY
     
     await update.message.reply_text(
         f"✅ Filename set to: **{filename}.txt**",
@@ -370,12 +380,6 @@ async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_pre_summary(query, context)
     return SUMMARY
 
-async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    filename = update.message.text.strip().replace(" ", "_")
-    context.user_data["filename"] = filename
-    await update.message.reply_text(f"✅ Filename set to: **{filename}.txt**", parse_mode='Markdown')
-    await show_pre_summary_from_message(update, context)
-    return SUMMARY
 
 async def check_cards_with_storm(cards: List[str], status_message, max_polls: int, context: ContextTypes.DEFAULT_TYPE):
     live_raw_cards = []
@@ -802,6 +806,83 @@ async def add_deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Deal added: **{count} for ${price}**", parse_mode='Markdown')
     except:
         await update.message.reply_text("Usage: `/adddeal 3/25`")
+
+async def show_pre_summary_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cards = context.user_data.get("all_cards", [])
+    total = len(cards)
+    usa = context.user_data.get("usa_count", total)
+    foreign = context.user_data.get("foreign_count", 0)
+    mode = context.user_data.get("mode", "normal")
+    customer = context.user_data.get("customer_name", "N/A")
+    filename = context.user_data.get("filename", "Not Set")
+    
+    text = (
+        f"📊 **PRE-SUMMARY**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Total Cards : `{total}`\n"
+        f"USA         : `{usa}`\n"
+        f"Foreign     : `{foreign}`\n"
+        f"Mode        : **{mode.upper()}**\n"
+        f"Customer    : `{customer}`\n"
+        f"Filename    : `{filename}`\n"
+        f"Time        : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}`\n\n"
+        "Choose an option below:"
+    )
+    
+    await update.message.reply_text(
+        text, 
+        reply_markup=pre_summary_keyboard(), 
+        parse_mode='Markdown'
+    )
+
+async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    last4 = update.message.text.strip()
+    if len(last4) != 4 or not last4.isdigit():
+        await update.message.reply_text("❌ Please send exactly 4 digits.")
+        return REMOVE_LAST4
+    
+    all_cards = context.user_data.get("all_cards", [])
+    filtered = [c for c in all_cards if not c.split('|')[0].strip().endswith(last4)]
+    removed = len(all_cards) - len(filtered)
+    
+    context.user_data["all_cards"] = filtered
+    
+    await update.message.reply_text(
+        f"✅ Removed **{removed}** card(s) ending with `{last4}`.",
+        parse_mode='Markdown'
+    )
+    await show_pre_summary_from_message(update, context)
+    return SUMMARY
+
+async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
+        return await start(update, context)
+    
+    text = ""
+    if update.message.document:
+        file = await update.message.document.get_file()
+        content = await file.download_as_bytearray()
+        text = content.decode("utf-8", errors="ignore")
+    else:
+        text = update.message.text or ""
+    
+    new_cards = [line.strip() for line in text.splitlines() 
+                 if "|" in line.strip() and len(line.split('|')) >= 3]
+    
+    if not new_cards:
+        await update.message.reply_text("❌ No valid cards found in your message.")
+        return ADD_MORE_CARDS
+    
+    context.user_data.setdefault("all_cards", []).extend(new_cards)
+    
+    await update.message.reply_text(
+        f"📥 Added **{len(new_cards)}** new cards.\n\n"
+        "Returning to pre-summary...",
+        parse_mode='Markdown'
+    )
+    await show_pre_summary_from_message(update, context)
+    return SUMMARY
+
 
 if __name__ == "__main__":
     print("✅ E$CO Bot v14.7 Starting on Railway...")
