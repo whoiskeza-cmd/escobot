@@ -41,7 +41,7 @@ POLL_INTERVAL = 12
 
 session = requests.Session()
 
-print("✅ E$CO Bot v14.5 - Zero Live FIXED (Tester Mode)")
+print("✅ E$CO Bot v14.5 - Zero Live FIXED (Full Version)")
 
 # ====================== BIN DATABASE ======================
 BIN_DATABASE = { ... }  # ← Keep your full BIN_DATABASE from previous version here
@@ -208,15 +208,11 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
 
             for item in items:
                 if not isinstance(item, dict): continue
-                
-                # Improved card matching for tester cards
                 card_num = str(item.get("card_number") or item.get("cc") or item.get("card") or "").strip()
-                if not card_num:
+                if not card_num or card_num in seen:
                     continue
-                    
-                if card_num not in seen and is_live(item):
+                if is_live(item):
                     seen.add(card_num)
-                    # Match by last 4 digits or full card number
                     for raw in cards:
                         raw_card = raw.split('|')[0].strip()
                         if raw_card.endswith(card_num[-4:]) or raw_card == card_num:
@@ -293,10 +289,172 @@ async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await check_balance(query, context)
     return MENU
 
-# ... [All other functions remain the same until show_post_summary] ...
+async def get_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = update.message.text.strip().replace(" ", "_")
+    context.user_data["customer_name"] = name
+    mode = context.user_data.get("mode")
+    if mode == "sale":
+        await update.message.reply_text(f"✅ Customer: **{name}**\n\nHow many **LIVE** cards do they want?", parse_mode='Markdown')
+        return TARGET_COUNT
+    elif mode == "replacement":
+        await update.message.reply_text(f"✅ Customer: **{name}**\n\nHow many replacements do they want?", parse_mode='Markdown')
+        return TARGET_COUNT
+
+async def get_target_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        target = int(update.message.text.strip())
+        context.user_data["target_count"] = target
+        await update.message.reply_text(f"✅ Target set to **{target}** live cards.\n\nSend cards or .txt file.", parse_mode='Markdown')
+        return COLLECTING
+    except:
+        await update.message.reply_text("❌ Please send a valid number.")
+        return TARGET_COUNT
+
+async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    filename = update.message.text.strip().replace(" ", "_")
+    context.user_data["filename"] = filename
+    await update.message.reply_text(f"✅ Filename set to: **{filename}.txt**", parse_mode='Markdown')
+    await show_pre_summary_from_message(update, context)
+    return SUMMARY
+
+async def collect_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
+        return await start(update, context)
+
+    text = ""
+    if update.message.document:
+        file = await update.message.document.get_file()
+        content = await file.download_as_bytearray()
+        text = content.decode("utf-8", errors="ignore")
+    else:
+        text = update.message.text or ""
+
+    new_cards = [line.strip() for line in text.splitlines() if "|" in line.strip() and len(line.split('|')) >= 3]
+    if not new_cards:
+        await update.message.reply_text("No valid cards found.")
+        return COLLECTING
+
+    context.user_data.setdefault("all_cards", []).extend(new_cards)
+    await update.message.reply_text(f"📥 Added **{len(new_cards)}** cards.\nUSA or Foreign?", reply_markup=usa_foreign_keyboard(), parse_mode='Markdown')
+    return USA_FOREIGN
+
+async def usa_foreign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "usa_cards":
+        context.user_data["usa_count"] = len(context.user_data.get("all_cards", []))
+        context.user_data["foreign_count"] = 0
+    else:
+        context.user_data["usa_count"] = 0
+        context.user_data["foreign_count"] = len(context.user_data.get("all_cards", []))
+    await show_pre_summary(query, context)
+    return SUMMARY
+
+async def show_pre_summary(query, context: ContextTypes.DEFAULT_TYPE):
+    cards = context.user_data.get("all_cards", [])
+    total = len(cards)
+    usa = context.user_data.get("usa_count", 0)
+    foreign = context.user_data.get("foreign_count", 0)
+    mode = context.user_data.get("mode", "normal")
+    filename = context.user_data.get("filename", "Not Set")
+    customer = context.user_data.get("customer_name", "N/A")
+    
+    text = f"📊 **PRE-SUMMARY**\n\n"
+    text += f"Total    : `{total}`\n"
+    text += f"USA      : `{usa}` | Foreign : `{foreign}`\n"
+    text += f"Mode     : **{mode.upper()}**\n"
+    text += f"Filename : `{filename}`\n"
+    text += f"Time     : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
+    if mode == "sale":
+        text += f"Customer : `{customer}`\n"
+    text += "\nSelect:"
+    
+    await query.edit_message_text(text, reply_markup=pre_summary_keyboard(), parse_mode='Markdown')
+
+async def show_pre_summary_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cards = context.user_data.get("all_cards", [])
+    total = len(cards)
+    usa = context.user_data.get("usa_count", 0)
+    foreign = context.user_data.get("foreign_count", 0)
+    mode = context.user_data.get("mode", "normal")
+    filename = context.user_data.get("filename", "Not Set")
+    customer = context.user_data.get("customer_name", "N/A")
+    
+    text = f"📊 **PRE-SUMMARY**\n\n"
+    text += f"Total    : `{total}`\n"
+    text += f"USA      : `{usa}` | Foreign : `{foreign}`\n"
+    text += f"Mode     : **{mode.upper()}**\n"
+    text += f"Filename : `{filename}`\n"
+    text += f"Time     : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
+    if mode == "sale":
+        text += f"Customer : `{customer}`\n"
+    text += "\nSelect:"
+    
+    await update.message.reply_text(text, reply_markup=pre_summary_keyboard(), parse_mode='Markdown')
+
+async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "add_more":
+        await query.edit_message_text("Send more cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+        return ADD_MORE_CARDS
+    if data == "set_filename":
+        await query.edit_message_text("Send the desired filename (without .txt):", parse_mode='Markdown')
+        return FILENAME
+    if data == "remove_last4":
+        await query.edit_message_text("🗑️ Send last 4 digits to remove:", parse_mode='Markdown')
+        return REMOVE_LAST4
+    if data == "confirm_check":
+        cards = context.user_data.get("all_cards", [])
+        if not cards:
+            await query.edit_message_text("❌ No cards.", reply_markup=main_menu())
+            return MENU
+        status_msg = await query.edit_message_text("🚀 Starting E$ CHECK...")
+        max_polls = get_max_polls(len(cards))
+        await check_cards_with_storm(cards, status_msg, max_polls, context)
+        return MENU
+    if data == "cancel":
+        await query.edit_message_text("✅ Cancelled.", reply_markup=main_menu())
+        context.user_data.clear()
+        return MENU
+
+async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    last4 = update.message.text.strip()
+    if len(last4) != 4 or not last4.isdigit():
+        await update.message.reply_text("❌ Send exactly 4 digits.")
+        return REMOVE_LAST4
+    all_cards = context.user_data.get("all_cards", [])
+    filtered = [c for c in all_cards if not c.split('|')[0].strip().endswith(last4)]
+    removed = len(all_cards) - len(filtered)
+    context.user_data["all_cards"] = filtered
+    await update.message.reply_text(f"✅ Removed **{removed}** card(s) ending `{last4}`.", parse_mode='Markdown')
+    await show_pre_summary_from_message(update, context)
+    return SUMMARY
+
+async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
+        return await start(update, context)
+
+    text = ""
+    if update.message.document:
+        file = await update.message.document.get_file()
+        content = await file.download_as_bytearray()
+        text = content.decode("utf-8", errors="ignore")
+    else:
+        text = update.message.text or ""
+
+    new_cards = [line.strip() for line in text.splitlines() if "|" in line.strip() and len(line.split('|')) >= 3]
+    if not new_cards:
+        await update.message.reply_text("No valid cards.")
+        return ADD_MORE_CARDS
+
+    context.user_data.setdefault("all_cards", []).extend(new_cards)
+    await update.message.reply_text(f"📥 Added **{len(new_cards)}** more.\nUSA or Foreign?", reply_markup=usa_foreign_keyboard(), parse_mode='Markdown')
+    return USA_FOREIGN
 
 async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
-    """Always shows summary - even with 0 live cards"""
     live_cards = context.user_data.get("live_cards", [])
     all_cards = context.user_data.get("all_cards", [])
     live_count = len(live_cards)
@@ -325,17 +483,17 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         summary_text += f"Customer    : `{customer}`\n"
         summary_text += f"Requested   : `{target}`\n"
 
+    keyboard = [
+        [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
+        [InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")]
+    ]
+
     if live_count == 0:
-        summary_text += "\n❌ **No live cards found.**\n\nYou can add more cards or return to menu."
-        keyboard = [
-            [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
-            [InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")]
-        ]
+        summary_text += "\n❌ **No live cards found.**"
         await status_msg.edit_message_text(summary_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         context.user_data.clear()
         return
 
-    # Live cards exist
     main_cards = live_cards[:target] if target > 0 and live_count >= target else live_cards
     extra_cards = live_cards[target:] if target > 0 and live_count > target else []
 
@@ -362,6 +520,9 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
             f.write(f"Batch ID: {batch_id}\n\n")
             f.write("\n\n".join(formatted_extra))
         context.user_data["extra_filename"] = extra_filename
+        keyboard.insert(0, [InlineKeyboardButton("📤 Send Extra Cards File", callback_data="send_extra_file")])
+
+    keyboard.insert(0, [InlineKeyboardButton("📤 Send Main Output", callback_data="send_main_output")])
 
     if mode == "sale" and main_cards:
         global total_revenue, total_cards_sold
@@ -370,20 +531,11 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         total_cards_sold += len(main_cards)
 
     delivered_text = f"\n✅ **{len(main_cards)} Live Card(s) Delivered**"
-
-    keyboard = [
-        [InlineKeyboardButton("📤 Send Main Output", callback_data="send_main_output")],
-    ]
-    if extra_cards:
-        keyboard.append([InlineKeyboardButton("📤 Send Extra Cards File", callback_data="send_extra_file")])
-    keyboard.append([InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")])
-    keyboard.append([InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")])
+    if mode == "sale":
+        delivered_text += f"\nCustomer : `{customer}`"
 
     final_message = summary_text + delivered_text
     await status_msg.edit_message_text(final_message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-
-# Keep all remaining functions exactly as they were in the previous version
-# (send_output_handler, check_balance, save_bin_rating, cancel, build_handler, set_buy_price, etc.)
 
 async def send_output_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -489,7 +641,6 @@ def build_handler():
         per_message=False,
     )
 
-# ====================== SETTINGS HANDLERS ======================
 async def set_buy_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global buy_price
     try:
