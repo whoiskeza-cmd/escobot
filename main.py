@@ -1,36 +1,33 @@
 import asyncio
-import os
 import random
+import os
 from datetime import datetime, timedelta
-from typing import List, Dict
-
-import requests
-from requests.adapters import HTTPAdapter, Retry
+from typing import List
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes,
-    filters, ConversationHandler, CallbackQueryHandler,
+    Application,
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters,
 )
-
 # ====================== CONFIG ======================
-TOKEN = "8736162481:AAExSSrfNZ9xSap7E-ZNtz42PvBbEIslvE0"
-OWNER_ID = 6329309831
-STORM_API_KEY = "38223|COVoley7T1hbfcCo92qI9Wr6NSbUVcMqTTLMePNMfc29b2ec"
-
-BASE_URL = "https://api.storm.gift/api/v1"
-HEADERS = {"Authorization": f"Bearer {STORM_API_KEY}", "Accept": "application/json", "Content-Type": "application/json"}
-
-INITIAL_WAIT = 25
-POLL_INTERVAL = 8
-SELLING_PRICE = 12.0
-REPLACEMENT_COST = 1.4
-buy_price = 1.4
-sell_price = 10
+TOKEN = os.getenv("TOKEN")  # Make sure this is set in Railway Variables
+BASE_URL = "38729|dQ5jePNKWclZ5rVjEnc32XOZknUR5XoAIfIQDMFla23ddea5"  # Change to your real checker API
+HEADERS = {"Authorization": "Bearer YOUR_KEY_HERE"}
+# Global variables
+deals = {}
+sell_price = 12.0
+buy_price = 1.60
 min_live_for_sale = 5
-deals = {}  # Format: {3: 20, 5: 45}
-
-session = requests.Session()
-session.mount("https://", HTTPAdapter(max_retries=Retry(total=8, backoff_factor=1.2, status_forcelist=[429, 500, 502, 503, 504])))
+REPLACEMENT_COST = 8.0
+total_revenue = 0.0
+total_cards_sold = 0
+total_replacements = 0
+print("✅ E$CO Bot v13.5 - Fixed Imports")
 
 # ====================== GLOBAL STATS ======================
 total_revenue = 0.0
@@ -767,8 +764,6 @@ async def main():
 if __name__ == "__main__":
     print("✅ E$CO Bot v13.5 Starting on Railway...")
     
-    # Fix for multiple instances on Railway
-    import os
     if os.environ.get("RAILWAY_ENVIRONMENT"):
         print("🚄 Railway detected - Using drop_pending_updates")
     
@@ -777,6 +772,6 @@ if __name__ == "__main__":
     
     print("🤖 Bot is now running successfully!")
     application.run_polling(
-        drop_pending_updates=True,   # This helps reduce conflict errors
+        drop_pending_updates=True,
         allowed_updates=["message", "callback_query"]
     )
