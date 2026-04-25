@@ -356,6 +356,19 @@ async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text("Unknown option.", reply_markup=main_menu())
         return MENU
 
+async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    filename = update.message.text.strip().replace(" ", "_").replace(".txt", "")
+    context.user_data["filename"] = filename
+    
+    await update.message.reply_text(
+        f"✅ Filename set to: **{filename}.txt**",
+        parse_mode='Markdown'
+    )
+    
+    # Show the pre-summary again
+    query = update.message  # dummy query object
+    await show_pre_summary(query, context)
+    return SUMMARY
 
 async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = update.message.text.strip().replace(" ", "_")
