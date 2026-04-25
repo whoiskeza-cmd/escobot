@@ -129,24 +129,41 @@ def replacement_menu():
         [InlineKeyboardButton("⬅️ Back", callback_data="back_to_main")],
     ])
 
-# ====================== FIXED FORMATTER ======================
+# ====================== FIXED FORMATTER - SUPPORTS BOTH FORMATS ======================
 def format_live_card(raw_line: str, is_tester: bool = False) -> str:
     try:
-        parts = [p.strip() for p in raw_line.replace("=>", "|").split('|')]
+        # Clean and split the line
+        line = raw_line.replace("=>", "|").strip()
+        parts = [p.strip() for p in line.split('|')]
         
         card    = parts[0]
-        month   = parts[1]
-        year    = parts[2]
-        cvv     = parts[3]
-        name    = parts[4]
-        address = parts[5]
-        city    = parts[6]
-        state   = parts[7]
-        zipcode = parts[8]
-        country = parts[9]
-        phone   = parts[10]
-        email   = parts[11] if len(parts) > 11 else "N/A"
-
+        cvv     = parts[2] if len(parts) > 2 else "000"
+        name    = parts[3] if len(parts) > 3 else "N/A"
+        address = parts[4] if len(parts) > 4 else "N/A"
+        city    = parts[5] if len(parts) > 5 else "N/A"
+        state   = parts[6] if len(parts) > 6 else "N/A"
+        zipcode = parts[7] if len(parts) > 7 else "N/A"
+        country = parts[8] if len(parts) > 8 else "US"
+        phone   = parts[9] if len(parts) > 9 else "N/A"
+        email   = parts[10] if len(parts) > 10 else "N/A"
+        # Handle both formats: "06/26" or "06" and "26"
+        if '/' in parts[1]:
+            expiry = parts[1]
+            mm, yy = expiry.split('/')
+        else:
+            mm = parts[1]
+            yy = parts[2] if len(parts) > 2 else "00"
+            # Adjust indices if expiry is split
+            if len(parts) > 11:  # Means we have separate MM and YY
+                cvv     = parts[3]
+                name    = parts[4]
+                address = parts[5]
+                city    = parts[6]
+                state   = parts[7]
+                zipcode = parts[8]
+                country = parts[9]
+                phone   = parts[10]
+                email   = parts[11] if len(parts) > 11 else "N/A"
         balance = get_random_balance(card, is_tester)
         ip = get_random_ip()
         info = get_bin_info(card)
@@ -154,7 +171,6 @@ def format_live_card(raw_line: str, is_tester: bool = False) -> str:
         vr = max(5, min(99, int(base_vr + random.gauss(0, 8))))
         
         bin_data = BIN_RATER.get(card[:6], {"rating": "N/A", "suggestion": "No rating added yet"})
-
         output = [
             "══════════════════════════════════════",
             f"🃏 LIVE • VR: {vr}%",
@@ -162,7 +178,7 @@ def format_live_card(raw_line: str, is_tester: bool = False) -> str:
             f"💰 Balance : ${balance:.2f}",
             f"👤 Name    : {name}",
             f"💳 Card    : {card}",
-            f"📅 Expiry  : {month}/{year}",
+            f"📅 Expiry  : {mm}/{yy}",
             f"🔒 CVV     : {cvv}",
             f"🏦 Bank    : {info.get('bank', 'UNKNOWN')}",
             f"🌍 Country : {country} • {info.get('brand', 'UNKNOWN')} {info.get('level', 'STANDARD')}",
@@ -186,8 +202,7 @@ def format_live_card(raw_line: str, is_tester: bool = False) -> str:
         return "\n".join(output)
         
     except Exception as e:
-        return f"Parse Error: {raw_line}\nError: {str(e)}"
-
+        return f"Parse Error on line: {raw_line}\nError: {str(e)}"
 # ====================== CHECKER ======================
 def is_live(item: dict) -> bool:
     if not isinstance(item, dict): return False
