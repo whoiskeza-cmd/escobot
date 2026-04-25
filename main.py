@@ -222,6 +222,19 @@ def is_live(item: dict) -> bool:
     positive = ["live", "approved", "success", "charged", "passed", "valid", "good", "200", "ok", "true"]
     return any(k in text for k in positive)
 
+async def get_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    customer_name = update.message.text.strip()
+    context.user_data["customer_name"] = customer_name
+    context.user_data["accumulated_live"] = []
+    context.user_data["all_cards"] = []
+    
+    await update.message.reply_text(
+        f"✅ Customer set to: **{customer_name}**\n\n"
+        f"Now send the target amount (how many live cards you want):",
+        parse_mode='Markdown'
+    )
+    return TARGET_AMOUNT
+
 async def collect_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
         return await start(update, context)
