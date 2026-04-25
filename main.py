@@ -222,6 +222,40 @@ def is_live(item: dict) -> bool:
     positive = ["live", "approved", "success", "charged", "passed", "valid", "good", "200", "ok", "true"]
     return any(k in text for k in positive)
 
+async def collect_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
+        return await start(update, context)
+    text = ""
+    if update.message.document:
+        file = await update.message.document.get_file()
+        content = await file.download_as_bytearray()
+        text = content.decode("utf-8", errors="ignore")
+    else:
+        text = update.message.text or ""
+    new_cards = [line.strip() for line in text.splitlines() if "|" in line.strip() and len(line.split('|')) >= 3]
+    if not new_cards:
+        await update.message.reply_text("No valid cards found.")
+        return COLLECTING
+    context.user_data.setdefault("all_cards", []).extend(new_cards)
+    await update.message.reply_text(
+        f"📥 Added **{len(new_cards)}** cards.\nUSA or Foreign?", 
+        reply_markup=usa_foreign_keyboard(), 
+        parse_mode='Markdown'
+    )
+    return USA_FOREIGN
+async def usa_foreign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "usa_cards":
+        context.user_data["usa_count"] = len(context.user_data.get("all_cards", []))
+        context.user_data["foreign_count"] = 0
+    else:
+        context.user_data["usa_count"] = 0
+        context.user_data["foreign_count"] = len(context.user_data.get("all_cards", []))
+    
+    await show_pre_summary(query, context)
+    return SUMMARY
+
 async def check_cards_with_storm(cards: List[str], status_message, max_polls: int, context: ContextTypes.DEFAULT_TYPE):
     live_raw_cards = []
     seen = set()
