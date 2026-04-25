@@ -256,6 +256,13 @@ async def usa_foreign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await show_pre_summary(query, context)
     return SUMMARY
 
+async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    filename = update.message.text.strip().replace(" ", "_")
+    context.user_data["filename"] = filename
+    await update.message.reply_text(f"✅ Filename set to: **{filename}.txt**", parse_mode='Markdown')
+    await show_pre_summary_from_message(update, context)
+    return SUMMARY
+
 async def check_cards_with_storm(cards: List[str], status_message, max_polls: int, context: ContextTypes.DEFAULT_TYPE):
     live_raw_cards = []
     seen = set()
