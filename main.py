@@ -256,6 +256,26 @@ async def collect_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
     return USA_FOREIGN
+
+async def get_target_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        target = int(update.message.text.strip())
+        if target < 1:
+            await update.message.reply_text("❌ Please send a number greater than 0.")
+            return TARGET_COUNT
+    except ValueError:
+        await update.message.reply_text("❌ Please send a valid number.")
+        return TARGET_COUNT
+    context.user_data["target_count"] = target
+    
+    await update.message.reply_text(
+        f"✅ Target set to **{target}** live cards.\n\n"
+        "Now send the cards (one per line or upload .txt file).\n"
+        "Type /cancel to stop.",
+        parse_mode='Markdown'
+    )
+    return COLLECTING
+
 async def usa_foreign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
