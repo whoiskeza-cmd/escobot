@@ -252,7 +252,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━━━━\nChoose option:"
     )
 
-    await update.message.reply_text(welcome_text, reply_markup=main_menu(), parse_mode='Markdown')
+    if update.message:
+        await update.message.reply_text(welcome_text, reply_markup=main_menu(), parse_mode='Markdown')
+    else:
+        await update.callback_query.edit_message_text(welcome_text, reply_markup=main_menu(), parse_mode='Markdown')
     context.user_data.clear()
     return MENU
 
@@ -418,7 +421,13 @@ async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     removed = len(all_cards) - len(filtered)
     context.user_data["all_cards"] = filtered
     await update.message.reply_text(f"✅ Removed **{removed}** card(s) ending `{last4}`.", parse_mode='Markdown')
-    await show_pre_summary(update, context)
+    
+    # Fixed: Create a fake query object so show_pre_summary works
+    class FakeQuery:
+        async def edit_message_text(self, text, reply_markup=None, parse_mode=None):
+            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    fake_query = FakeQuery()
+    await show_pre_summary(fake_query, context)
     return SUMMARY
 
 async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
