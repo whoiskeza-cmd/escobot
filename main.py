@@ -231,10 +231,33 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
 
     return live_raw_cards, batch_id
 
+# ====================== HANDLER FUNCTIONS (MOVED UP) ======================
+async def get_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = update.message.text.strip().replace(" ", "_")
+    context.user_data["customer_name"] = name
+    mode = context.user_data.get("mode", "normal")
+    text = f"✅ Customer: **{name}**\n\n"
+    if mode == "sale":
+        text += "How many **LIVE** cards? (number)"
+    else:
+        text += "How many replacements? (number)"
+    await update.message.reply_text(text, parse_mode='Markdown')
+    return TARGET_COUNT
+
+async def get_target_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        count = int(update.message.text.strip())
+        context.user_data["target_count"] = count
+        await update.message.reply_text("✅ Target saved.\nSend cards or .txt file.", parse_mode='Markdown')
+        return COLLECTING
+    except:
+        await update.message.reply_text("❌ Invalid number.")
+        return TARGET_COUNT
+
 # ====================== STATES ======================
 MENU, COLLECTING, USA_FOREIGN, SUMMARY, ADD_MORE_CARDS, REMOVE_LAST4, CUSTOMER_NAME, TARGET_COUNT, BIN_RATER_MODE, FILENAME, REP_SETTINGS = range(11)
 
-# ====================== HANDLERS ======================
+# ====================== MAIN HANDLERS ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("Unauthorized.")
