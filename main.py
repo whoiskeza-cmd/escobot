@@ -209,7 +209,7 @@ def is_live(item: dict) -> bool:
     positive = ["live", "approved", "success", "charged", "passed", "valid", "good", "200", "ok"]
     return any(k in text for k in positive)
 
-async def check_cards_with_storm(cards: List[str], status_message, max_polls: int):
+async def check_cards_with_storm(cards: List[str], status_message, max_polls: int, context: ContextTypes.DEFAULT_TYPE):
     live_raw_cards = []
     seen = set()
     batch_id = None
@@ -224,10 +224,11 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
         batch_id = data.get("batch_id") or data.get("id") or data.get("data", {}).get("batch_id") or data.get("data", {}).get("id")
         if not batch_id:
             await status_message.edit_text("❌ Failed to get batch_id.")
-            return [], None
+            return
+        context.user_data["batch_id"] = batch_id
     except Exception as e:
         await status_message.edit_text(f"❌ Submission Error: {str(e)}")
-        return [], None
+        return
 
     await status_message.edit_text(f"✅ Batch {batch_id} submitted.\nEnsuring 100% Quality By Balance And Live Checking\nWaiting {INITIAL_WAIT}s...")
     await asyncio.sleep(INITIAL_WAIT)
@@ -261,7 +262,9 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
 
         await asyncio.sleep(POLL_INTERVAL)
 
-    return live_raw_cards, batch_id
+    # IMPORTANT: Always call post summary after polling ends
+    context.user_data["live_cards"] = live_raw_cards
+    await show_post_summary(status_message, context)
 
 # ====================== HANDLER FUNCTIONS ======================
 async def get_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -452,7 +455,8 @@ async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         status_msg = await query.edit_message_text("🚀 Starting E$ CHECK...")
         max_polls = get_max_polls(len(cards))
-        live_cards, batch_id = await check_cards_with_storm(cards, status_msg, max_polls)
+        await check_cards_with_storm(cards, status_msg, max_polls, context)
+        return MENU
         context.user_data["live_cards"] = live_cards
         context.user_data["batch_id"] = batch_id
 
@@ -734,7 +738,10 @@ def build_handler():
             MENU: [CallbackQueryHandler(main_button)],
             COLLECTING: [MessageHandler(filters.TEXT | filters.Document.ALL, collect_cards)],
             USA_FOREIGN: [CallbackQueryHandler(usa_foreign_handler)],
-            SUMMARY: [CallbackQueryHandler(pre_summary_handler)],
+            SUMMARY: [
+                CallbackQueryHandler(pre_summary_handler),
+                CallbackQueryHandler(send_output_handler)
+            ],
             ADD_MORE_CARDS: [MessageHandler(filters.TEXT | filters.Document.ALL, add_more_cards)],
             REMOVE_LAST4: [MessageHandler(filters.TEXT & ~filters.COMMAND, remove_last4_handler)],
             BIN_RATER_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_bin_rating)],
@@ -743,7 +750,11 @@ def build_handler():
             TARGET_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_target_count)],
             REP_SETTINGS: [
                 CommandHandler("setvr", set_vr),
-                CommandHandler("setformat", set_format)
+                CommandHandler("setformat", set_format),
+                CommandHandler("setbuy", set_buy_price),
+                CommandHandler("setsell", set_sell_price),
+                CommandHandler("setmin", set_min_live),
+                CommandHandler("adddeal", add_deal),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
