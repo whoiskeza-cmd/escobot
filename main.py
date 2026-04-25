@@ -426,23 +426,36 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
 
 async def handle_live_accumulation(status_msg, context: ContextTypes.DEFAULT_TYPE):
     mode = context.user_data.get("mode", "normal")
-    target = context.user_data.get("target_count", 0)
+    target = context.user_data.get("target_count", 5)
     accumulated = context.user_data.get("accumulated_live", [])
     accumulated_count = len(accumulated)
     
     if mode == "tester":
-        if accumulated_count == 0:
-            text = "❌ **No live cards found.**\n\nSend more tester cards."
-            keyboard = [
-                [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
-                [InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")]
-            ]
-            await status_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-            return
-        else:
-            context.user_data["live_cards"] = accumulated[:]
-            await show_post_summary(status_msg, context)
-            return
+        context.user_data["customer_name"] = "Not Required"   # This is what you wanted
+        context.user_data["live_cards"] = accumulated[:]
+        await show_post_summary(status_msg, context)
+        return
+    
+    # Sale / Replacement Mode logic
+    if accumulated_count < target:
+        text = (
+            f"📊 **Partial Result**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Target      : `{target}`\n"
+            f"Accumulated : `{accumulated_count}`\n"
+            f"Needed      : `{target - accumulated_count}` more live cards.\n\n"
+            "Send more cards for a new batch."
+        )
+        keyboard = [
+            [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
+            [InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")]
+        ]
+        await status_msg.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        return
+    else:
+        context.user_data["live_cards"] = accumulated[:]
+        await show_post_summary(status_msg, context)
+
     
     # Sale mode
     if accumulated_count < target:
@@ -464,58 +477,57 @@ async def handle_live_accumulation(status_msg, context: ContextTypes.DEFAULT_TYP
         context.user_data["live_cards"] = accumulated[:]
         await show_post_summary(status_msg, context)
 async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
-    """This function runs after check_cards_with_storm finishes.
-    It decides what to show to the user based on accumulated live cards."""
-    
     accumulated_live = context.user_data.get("accumulated_live", [])
     total_live = len(accumulated_live)
-    
     mode = context.user_data.get("mode", "normal")
     target = context.user_data.get("target_count", 0)
-    customer = context.user_data.get("customer_name", "Unknown")
-    filename_base = context.user_data.get("filename", f"ESCO_Batch_{datetime.now().strftime('%Y%m%d_%H%M')}")
-    # Split into main delivery and extra cards (only in sale/replacement mode)
+    customer = context.user_data.get("customer_name", "Not Required")
+    filename_base = context.user_data.get("filename", f"ESCO_Tester_{datetime.now().strftime('%Y%m%d_%H%M')}")
+    
     if mode in ["sale", "replacement"] and target > 0:
         main_cards = accumulated_live[:target]
         extra_cards = accumulated_live[target:]
     else:
         main_cards = accumulated_live
         extra_cards = []
-    # Save to context so other handlers can access them
+    
     context.user_data["main_cards"] = main_cards
     context.user_data["extra_cards"] = extra_cards
     context.user_data["final_filename"] = f"{filename_base}.txt"
-    # Format the cards nicely
+    
     formatted_main = [format_live_card(raw, mode == "tester") for raw in main_cards]
-    # Create the main output file
+    
     with open(context.user_data["final_filename"], "w", encoding="utf-8") as f:
         f.write("══════════════════════════════════════\n")
         f.write("             E$CO CHECK OUTPUT\n")
         f.write("══════════════════════════════════════\n\n")
-        f.write("\n\n".join(formatted_main))
-        f.write("\n\n══════════════════════════════════════\n")
-        f.write(f"Customer   : {customer}\n")
+        if mode == "tester":
+            f.write("Mode       : TESTER CARDS (Shared)\n")
+            f.write("Customer   : Not Required\n")
+        else:
+            f.write(f"Customer   : {customer}\n")
         f.write(f"Target     : {target}\n")
         f.write(f"Delivered  : {len(main_cards)}\n")
         f.write(f"Total Live : {total_live}\n")
-        f.write(f"Time       : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
-        f.write("══════════════════════════════════════\n")
-    # Create extra file if there are extra live cards
+        f.write(f"Time       : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
+        f.write("══════════════════════════════════════\n\n")
+        f.write("\n\n".join(formatted_main))
+        f.write("\n\n══════════════════════════════════════\n")
+    
     extra_filename = None
     if extra_cards:
-        extra_filename = f"{filename_base}_EXTRA_{len(extra_cards)}.txt"
+        extra_filename = f"{filename_base}_EXTRA.txt"
         formatted_extra = [format_live_card(raw, mode == "tester") for raw in extra_cards]
         with open(extra_filename, "w", encoding="utf-8") as f:
             f.write(f"EXTRA LIVE CARDS — {len(extra_cards)} cards\n\n")
             f.write("\n\n".join(formatted_extra))
         context.user_data["extra_filename"] = extra_filename
-    # Update global sales statistics
+    
     if mode == "sale" and main_cards:
         global total_revenue, total_cards_sold
-        revenue = round(len(main_cards) * sell_price, 2)
-        total_revenue += revenue
+        total_revenue += round(len(main_cards) * sell_price, 2)
         total_cards_sold += len(main_cards)
-    # Build the message the user sees
+    
     summary_text = (
         f"✅ **TARGET REACHED SUCCESSFULLY**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -524,10 +536,10 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         f"Extra Cards      : `{len(extra_cards)}`\n"
         f"Customer         : `{customer}`\n"
         f"Mode             : `{mode.upper()}`\n"
-        f"Time             : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}`\n\n"
+        f"Time             : `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC`\n\n"
         "What would you like to do next?"
     )
-    # Build buttons
+    
     keyboard = [
         [InlineKeyboardButton("📤 Send Main Output File", callback_data="send_main_output")],
     ]
@@ -538,7 +550,8 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("➕ Add More Cards (New Batch)", callback_data="add_more")],
         [InlineKeyboardButton("🏠 Back to Main Menu", callback_data="back_to_main")]
     ])
-    await status_msg.edit_text(summary_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    
+    await status_msg.edit_message_text(summary_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 # ====================== ALL OTHER HANDLERS (UNCHANGED) ======================
 async def send_output_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
