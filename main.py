@@ -112,7 +112,7 @@ def replacement_menu():
         [InlineKeyboardButton("⬅️ Back", callback_data="back_to_main")],
     ])
 
-# ====================== FORMATTER (CLEAN FIXED VERSION) ======================
+# ====================== CLEAN FORMATTER ======================
 def format_live_card(raw_line: str, is_tester: bool = False) -> str:
     try:
         parts = [p.strip() for p in raw_line.replace("=>", "|").split('|')]
@@ -137,36 +137,40 @@ def format_live_card(raw_line: str, is_tester: bool = False) -> str:
         
         bin_data = BIN_RATER.get(card_number[:6], {"rating": "N/A", "suggestion": "No rating added yet"})
 
-        lines = [
-            "═━═━═━═━═━═━═━═",
+        output = [
+            "══════════════════════════════════════",
             f"🃏 LIVE • VR: {vr}%",
-            "═━═━═━═━═━═━═━═",
-            f"💰 ${balance:.2f}    👤 {name}",
-            f"💳 {card_number}    📅 {mm}/{yy}    🔒 {cvv}",
-            f"🏦 {info.get('bank', 'UNKNOWN')}",
-            f"🌍 {info.get('country', 'UNKNOWN')} • {info.get('brand', 'UNKNOWN')} {info.get('level', 'STANDARD')}",
+            "══════════════════════════════════════",
+            f"💰 Balance : ${balance:.2f}",
+            f"👤 Name    : {name}",
+            f"💳 Card    : {card_number}",
+            f"📅 Expiry  : {mm}/{yy}",
+            f"🔒 CVV     : {cvv}",
+            f"🏦 Bank    : {info.get('bank', 'UNKNOWN')}",
+            f"🌍 Country : {info.get('country', 'UNKNOWN')} • {info.get('brand', 'UNKNOWN')} {info.get('level', 'STANDARD')}",
             "",
-            "📍 Billing:",
+            "📍 Billing Address:",
             f"   {address}",
             f"   {city}, {state} {zip_code}",
-            f"   ☎ {phone}",
-            f"   ✉️ {email}",
+            f"   Phone : {phone}",
+            f"   Email : {email}",
             "",
-            f"🌐 {ip}    🕒 {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            "═━═━═━═━═━═━═━═",
-            f"📊 BIN Rate: {bin_data['rating']} | {bin_data['suggestion']}",
-            "═━═━═━═━═━═━═━═"
+            f"🌐 IP : {ip}",
+            f"🕒 Checked : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "══════════════════════════════════════",
+            f"BIN Rate : {bin_data['rating']} | {bin_data['suggestion']}",
+            "══════════════════════════════════════"
         ]
         
         if is_tester:
-            lines.append("❤️ Thank You For Choosing E$CO ❤️")
+            output.append("❤️ Thank You For Choosing E$CO ❤️")
             
-        return "\n".join(lines)
+        return "\n".join(output)
         
     except Exception:
         return f"Parse Error: {raw_line}"
 
-# ====================== IMPROVED CHECKER ======================
+# ====================== CHECKER ======================
 def is_live(item: dict) -> bool:
     if not isinstance(item, dict): return False
     text = " ".join(str(v).lower() for v in item.values())
@@ -220,10 +224,6 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
                             if raw not in live_raw_cards:
                                 live_raw_cards.append(raw)
                             break
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 429:
-                await asyncio.sleep(15)
-                continue
         except Exception:
             pass
 
@@ -231,7 +231,7 @@ async def check_cards_with_storm(cards: List[str], status_message, max_polls: in
 
     return live_raw_cards, batch_id
 
-# ====================== HANDLER FUNCTIONS (MOVED UP) ======================
+# ====================== HANDLER FUNCTIONS ======================
 async def get_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip().replace(" ", "_")
     context.user_data["customer_name"] = name
@@ -257,7 +257,6 @@ async def get_target_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====================== STATES ======================
 MENU, COLLECTING, USA_FOREIGN, SUMMARY, ADD_MORE_CARDS, REMOVE_LAST4, CUSTOMER_NAME, TARGET_COUNT, BIN_RATER_MODE, FILENAME, REP_SETTINGS = range(11)
 
-# ====================== MAIN HANDLERS ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("Unauthorized.")
@@ -505,14 +504,14 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     formatted = [format_live_card(raw, mode == "tester") for raw in live_cards]
 
     with open(final_filename, "w", encoding="utf-8") as f:
-        f.write("═" * 50 + "\n")
+        f.write("══════════════════════════════════════\n")
         f.write("          E$CO CHECK OUTPUT\n")
-        f.write("═" * 50 + "\n\n")
+        f.write("══════════════════════════════════════\n\n")
         f.write("\n\n".join(formatted))
-        f.write("\n\n" + "═" * 60 + "\n")
+        f.write("\n\n══════════════════════════════════════\n")
         f.write("E$CO Post Summary Attached\n")
         f.write(f"Time Checked (EST): {est_time}\n")
-        f.write("═" * 60 + "\n")
+        f.write("══════════════════════════════════════\n")
 
     post_text = (
         "📊 **POST SUMMARY**\n"
@@ -608,7 +607,7 @@ def build_handler():
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(build_handler())
-    print("✅ E$CO Bot v13.2 - Clean Format + Set Filename Button")
+    print("✅ E$CO Bot v13.3 - Clean & Fixed Formatting")
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
