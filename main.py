@@ -662,6 +662,34 @@ async def add_deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         deals[count] = price
         await update.message.reply_text(f"✅ Deal added: **{count} for ${price}**", parse_mode='Markdown')
     except:
+        await update.message.reply_text("Usage: `/adddeal 3/25` or `/adddeal 5/55`")
+        return
+def build_handler():
+    return ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            MENU: [CallbackQueryHandler(main_button)],
+            COLLECTING: [MessageHandler(filters.TEXT | filters.Document.ALL, collect_cards)],
+            USA_FOREIGN: [CallbackQueryHandler(usa_foreign_handler)],
+            SUMMARY: [CallbackQueryHandler(pre_summary_handler)],
+            ADD_MORE_CARDS: [MessageHandler(filters.TEXT | filters.Document.ALL, add_more_cards)],
+            REMOVE_LAST4: [MessageHandler(filters.TEXT & ~filters.COMMAND, remove_last4_handler)],
+            BIN_RATER_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_bin_rating)],
+            FILENAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_filename)],
+            CUSTOMER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_customer_name)],
+            TARGET_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_target_count)],
+            REP_SETTINGS: [
+                CommandHandler("setvr", set_vr),
+                CommandHandler("setformat", set_format),
+                CommandHandler("setbuy", set_buy_price),
+                CommandHandler("setsell", set_sell_price),
+                CommandHandler("setmin", set_min_live),
+                CommandHandler("adddeal", add_deal),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_chat=True,
+    )
 
 def build_handler():
     return ConversationHandler(
