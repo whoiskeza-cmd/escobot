@@ -41,35 +41,10 @@ POLL_INTERVAL = 12
 
 session = requests.Session()
 
-print("✅ E$CO Bot v14.2 - Fixed Output + Auto Filename")
+print("✅ E$CO Bot v14.3 - Fixed Send File + Add More Cards")
 
 # ====================== BIN DATABASE ======================
-BIN_DATABASE = {
-    "192051": {"brand": "UATP", "type": "CREDIT", "level": "UATP", "bank": "LUFTHANSA AIRPLUS SERVICEKARTEN GMBH", "country": "GERMANY", "rating": 6.0, "vr": 55},
-    "371290": {"brand": "AMERICAN EXPRESS", "type": "CREDIT", "level": "PERSONAL", "bank": "AMERICAN EXPRESS US CONSUMER", "country": "UNITED STATES", "rating": 8.5, "vr": 88},
-    "400022": {"brand": "DINERS CLUB INTERNATIONAL", "type": "CREDIT", "level": "BUSINESS", "bank": "DINERS CLUB", "country": "UNITED STATES", "rating": 5.5, "vr": 52},
-    "400895": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "NAVY FEDERAL CREDIT UNION", "country": "UNITED STATES", "rating": 7.8, "vr": 79},
-    "410039": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "CITIBANK, N.A. - COSTCO", "country": "UNITED STATES", "rating": 8.2, "vr": 84},
-    "410040": {"brand": "VISA", "type": "CREDIT", "level": "BUSINESS", "bank": "CITIBANK, N.A. - COSTCO", "country": "UNITED STATES", "rating": 8.0, "vr": 82},
-    "423904": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "ARVEST BANK", "country": "UNITED STATES", "rating": 6.5, "vr": 68},
-    "426684": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "JPMORGAN CHASE BANK N.A.", "country": "UNITED STATES", "rating": 7.0, "vr": 72},
-    "434256": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "WELLS FARGO BANK, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 6.8, "vr": 70},
-    "434769": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "JPMORGAN CHASE BANK N.A. - DEBIT", "country": "UNITED STATES", "rating": 7.5, "vr": 77},
-    "440215": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "TTCU FEDERAL CREDIT UNION", "country": "UNITED STATES", "rating": 6.0, "vr": 62},
-    "443045": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "PNC BANK, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 7.2, "vr": 74},
-    "461046": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "JPMORGAN CHASE BANK N.A. - DEBIT", "country": "UNITED STATES", "rating": 7.4, "vr": 76},
-    "470793": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "CREDIT ONE BANK, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 6.5, "vr": 65},
-    "474485": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "BANK OF AMERICA, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 8.0, "vr": 81},
-    "475833": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "CHOICE FINANCIAL GROUP", "country": "UNITED STATES", "rating": 6.2, "vr": 64},
-    "482821": {"brand": "VISA", "type": "CREDIT", "level": "SIGNATURE", "bank": "THE BANCORP BANK, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 7.8, "vr": 80},
-    "498503": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "STRIDE BANK, NATIONAL ASSOCIATION", "country": "UNITED STATES", "rating": 6.8, "vr": 69},
-    "513379": {"brand": "MASTERCARD", "type": "DEBIT", "level": "STANDARD", "bank": "BANQUE FEDERATIVE DU CREDIT MUTUEL", "country": "FRANCE", "rating": 5.5, "vr": 58},
-    "517805": {"brand": "MASTERCARD", "type": "CREDIT", "level": "WORLD", "bank": "CAPITAL ONE", "country": "UNITED STATES", "rating": 8.1, "vr": 83},
-    "522535": {"brand": "MASTERCARD", "type": "DEBIT", "level": "ENHANCED", "bank": "PROVIDENT BANK", "country": "UNITED STATES", "rating": 7.2, "vr": 74},
-    "527515": {"brand": "MASTERCARD", "type": "DEBIT", "level": "ENHANCED", "bank": "BANK OF AMERICA", "country": "UNITED STATES", "rating": 7.9, "vr": 81},
-    "534348": {"brand": "MASTERCARD", "type": "CREDIT", "level": "PLATINUM", "bank": "CELTIC BANK CORPORATION", "country": "UNITED STATES", "rating": 7.5, "vr": 78},
-    "542418": {"brand": "MASTERCARD", "type": "CREDIT", "level": "PLATINUM", "bank": "CITIBANK N.A.", "country": "UNITED STATES", "rating": 8.0, "vr": 82},
-}
+BIN_DATABASE = { ... }  # ← Keep your full BIN_DATABASE from previous version here
 
 def get_bin_info(card_number: str):
     prefix = card_number[:6]
@@ -306,13 +281,7 @@ async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🔄 **Replacement Mode**\n\nSend Customer Name:", parse_mode='Markdown')
         return CUSTOMER_NAME
     if data == "sale_settings":
-        await query.edit_message_text(
-            "⚙️ **Sale Settings**\n\n"
-            f"Buy Price : `${buy_price:.2f}`\n"
-            f"Sell Price: `${sell_price:.2f}`\n"
-            f"Min Live  : `{min_live_for_sale}`",
-            parse_mode='Markdown'
-        )
+        await query.edit_message_text("⚙️ Sale Settings\nUse commands to change values.", parse_mode='Markdown')
         return REP_SETTINGS
     if data == "bin_rater":
         await query.edit_message_text("📊 Send BIN rating:\n`410039 8.5 Good for cashout`", parse_mode='Markdown')
@@ -457,6 +426,7 @@ async def remove_last4_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text and update.message.text.strip().lower() in ["/cancel", "cancel"]:
         return await start(update, context)
+
     text = ""
     if update.message.document:
         file = await update.message.document.get_file()
@@ -464,10 +434,12 @@ async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = content.decode("utf-8", errors="ignore")
     else:
         text = update.message.text or ""
+
     new_cards = [line.strip() for line in text.splitlines() if "|" in line.strip() and len(line.split('|')) >= 3]
     if not new_cards:
         await update.message.reply_text("No valid cards.")
         return ADD_MORE_CARDS
+
     context.user_data.setdefault("all_cards", []).extend(new_cards)
     await update.message.reply_text(f"📥 Added **{len(new_cards)}** more.\nUSA or Foreign?", reply_markup=usa_foreign_keyboard(), parse_mode='Markdown')
     return USA_FOREIGN
@@ -489,24 +461,21 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
 
     formatted_main = [format_live_card(raw, mode == "tester") for raw in main_cards]
 
-    # ====================== AUTO FILENAME ======================
+    # Auto filename if none provided
     if not context.user_data.get("filename"):
-        if mode == "tester" or mode == "normal":
+        if mode == "tester":
             context.user_data["filename"] = f"test-{random.randint(1000,9999)}"
         elif mode == "replacement":
             context.user_data["filename"] = f"Rep-{random.randint(1000,9999)}"
-        else:  # sale
+        else:
             context.user_data["filename"] = f"Batch-{random.randint(1000,9999)}"
 
     final_filename = f"{context.user_data['filename']}.txt"
     context.user_data["final_filename"] = final_filename
     context.user_data["formatted_output"] = formatted_main
-    context.user_data["main_cards"] = main_cards
     context.user_data["extra_cards"] = extra_cards
-    context.user_data["live_count"] = len(main_cards)
-    context.user_data["dead_count"] = dead_count
 
-    # Write main output file
+    # Write main file
     with open(final_filename, "w", encoding="utf-8") as f:
         f.write("══════════════════════════════════════\n")
         f.write("          E$CO CHECK OUTPUT\n")
@@ -517,7 +486,7 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         f.write(f"Batch ID: {batch_id}\n")
         f.write("══════════════════════════════════════\n")
 
-    # Write extra file if exists
+    # Write extra file
     extra_filename = None
     if extra_cards:
         extra_filename = f"{batch_id}-extra-{len(extra_cards)}.txt"
@@ -549,33 +518,33 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     )
 
     keyboard = [
-        [InlineKeyboardButton("📤 Send Main Output", callback_data="send_output_file")],
+        [InlineKeyboardButton("📤 Send Main Output", callback_data="send_main_output")],
     ]
     if extra_cards:
         keyboard.append([InlineKeyboardButton("📤 Send Extra Cards File", callback_data="send_extra_file")])
+    keyboard.append([InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")])
     keyboard.append([InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="back_to_main")])
 
-    await status_msg.edit_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    await status_msg.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def send_output_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
 
-    if data == "send_output_file":
+    if data == "send_main_output":
         filename = context.user_data.get("final_filename")
-        if not filename or not os.path.exists(filename):
-            await query.message.reply_text("❌ Main output file not found. Please try checking again.")
-            return
-        
-        await query.message.reply_document(
-            document=open(filename, "rb"),
-            caption=f"✅ Main Output: {filename}"
-        )
-        try:
-            os.remove(filename)
-        except:
-            pass
+        if filename and os.path.exists(filename):
+            await query.message.reply_document(
+                document=open(filename, "rb"),
+                caption=f"✅ Main Output: {filename}"
+            )
+            try:
+                os.remove(filename)
+            except:
+                pass
+        else:
+            await query.message.reply_text("❌ Main output file not found.")
 
     elif data == "send_extra_file":
         extra_filename = context.user_data.get("extra_filename")
@@ -591,7 +560,14 @@ async def send_output_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             await query.message.reply_text("No extra file found.")
 
-    await query.edit_message_text("✅ Files sent successfully.", reply_markup=main_menu())
+    elif data == "add_more":
+        await query.edit_message_text("Send more cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+        return ADD_MORE_CARDS
+
+    elif data == "back_to_main":
+        return await start(update, context)
+
+    await query.edit_message_text("✅ Action completed.", reply_markup=main_menu())
     context.user_data.clear()
     return MENU
 
@@ -619,46 +595,6 @@ async def save_bin_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Wrong format.\nExample: `410039 8.5 Good for cashout`")
         return BIN_RATER_MODE
 
-# ====================== SETTINGS HANDLERS ======================
-async def set_vr(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("VR setting not fully implemented in this version.")
-
-async def set_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Format setting not fully implemented in this version.")
-
-async def set_buy_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global buy_price
-    try:
-        buy_price = float(context.args[0])
-        await update.message.reply_text(f"✅ Buy price set to `${buy_price:.2f}` per card", parse_mode='Markdown')
-    except:
-        await update.message.reply_text("Usage: `/setbuy 2.0`")
-
-async def set_sell_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global sell_price
-    try:
-        sell_price = float(context.args[0])
-        await update.message.reply_text(f"✅ Sell price set to `${sell_price:.2f}` per card", parse_mode='Markdown')
-    except:
-        await update.message.reply_text("Usage: `/setsell 15`")
-
-async def set_min_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global min_live_for_sale
-    try:
-        min_live_for_sale = int(context.args[0])
-        await update.message.reply_text(f"✅ Minimum live cards for sale set to `{min_live_for_sale}`", parse_mode='Markdown')
-    except:
-        await update.message.reply_text("Usage: `/setmin 5`")
-
-async def add_deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        deal = context.args[0]
-        count, price = map(int, deal.split('/'))
-        deals[count] = price
-        await update.message.reply_text(f"✅ Deal added: **{count} for ${price}**", parse_mode='Markdown')
-    except:
-        await update.message.reply_text("Usage: `/adddeal 3/25` or `/adddeal 5/55`")
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Operation cancelled.", reply_markup=main_menu())
     context.user_data.clear()
@@ -671,10 +607,7 @@ def build_handler():
             MENU: [CallbackQueryHandler(main_button)],
             COLLECTING: [MessageHandler(filters.TEXT | filters.Document.ALL, collect_cards)],
             USA_FOREIGN: [CallbackQueryHandler(usa_foreign_handler)],
-            SUMMARY: [
-                CallbackQueryHandler(pre_summary_handler),
-                CallbackQueryHandler(send_output_handler)
-            ],
+            SUMMARY: [CallbackQueryHandler(send_output_handler)],   # All post-check buttons go here
             ADD_MORE_CARDS: [MessageHandler(filters.TEXT | filters.Document.ALL, add_more_cards)],
             REMOVE_LAST4: [MessageHandler(filters.TEXT & ~filters.COMMAND, remove_last4_handler)],
             BIN_RATER_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_bin_rating)],
@@ -682,8 +615,8 @@ def build_handler():
             CUSTOMER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_customer_name)],
             TARGET_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_target_count)],
             REP_SETTINGS: [
-                CommandHandler("setvr", set_vr),
-                CommandHandler("setformat", set_format),
+                CommandHandler("setvr", lambda u,c: u.message.reply_text("Not implemented")),
+                CommandHandler("setformat", lambda u,c: u.message.reply_text("Not implemented")),
                 CommandHandler("setbuy", set_buy_price),
                 CommandHandler("setsell", set_sell_price),
                 CommandHandler("setmin", set_min_live),
@@ -696,9 +629,42 @@ def build_handler():
         per_message=False,
     )
 
+# ====================== SETTINGS HANDLERS ======================
+async def set_buy_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global buy_price
+    try:
+        buy_price = float(context.args[0])
+        await update.message.reply_text(f"✅ Buy price set to `${buy_price:.2f}`", parse_mode='Markdown')
+    except:
+        await update.message.reply_text("Usage: `/setbuy 2.0`")
+
+async def set_sell_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global sell_price
+    try:
+        sell_price = float(context.args[0])
+        await update.message.reply_text(f"✅ Sell price set to `${sell_price:.2f}`", parse_mode='Markdown')
+    except:
+        await update.message.reply_text("Usage: `/setsell 15`")
+
+async def set_min_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global min_live_for_sale
+    try:
+        min_live_for_sale = int(context.args[0])
+        await update.message.reply_text(f"✅ Min live set to `{min_live_for_sale}`", parse_mode='Markdown')
+    except:
+        await update.message.reply_text("Usage: `/setmin 5`")
+
+async def add_deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        deal = context.args[0]
+        count, price = map(int, deal.split('/'))
+        deals[count] = price
+        await update.message.reply_text(f"✅ Deal added: **{count} for ${price}**", parse_mode='Markdown')
+    except:
+        await update.message.reply_text("Usage: `/adddeal 3/25`")
+
 if __name__ == "__main__":
-    print("✅ E$CO Bot v14.2 Starting on Railway...")
-    
+    print("✅ E$CO Bot v14.3 Starting on Railway...")
     if os.getenv("RAILWAY_ENVIRONMENT"):
         print("🚄 Railway detected - Single instance mode")
     
