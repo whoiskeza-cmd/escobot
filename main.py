@@ -24,6 +24,10 @@ INITIAL_WAIT = 25
 POLL_INTERVAL = 8
 SELLING_PRICE = 12.0
 REPLACEMENT_COST = 1.4
+buy_price = 1.4
+sell_price = 10
+min_live_for_sale = 5
+deals = {}  # Format: {3: 20, 5: 45}
 
 session = requests.Session()
 session.mount("https://", HTTPAdapter(max_retries=Retry(total=8, backoff_factor=1.2, status_forcelist=[429, 500, 502, 503, 504])))
@@ -93,14 +97,15 @@ def get_max_polls(total_cards: int) -> int:
 # ====================== KEYBOARDS ======================
 def main_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔍 Start New Check", callback_data="start_format")],
+        [InlineKeyboardButton("🔍 Normal Check", callback_data="start_format")],
         [InlineKeyboardButton("🧪 Tester Cards", callback_data="start_tester")],
-        [InlineKeyboardButton("🔄 E$ Replacement", callback_data="start_replacement")],
-        [InlineKeyboardButton("💰 Record Sale", callback_data="record_sale")],
+        [InlineKeyboardButton("💰 Start Sale", callback_data="start_sale")],
+        [InlineKeyboardButton("⚙️ Sale Settings", callback_data="sale_settings")],
+        [InlineKeyboardButton("🔄 Replacement", callback_data="start_replacement")],
         [InlineKeyboardButton("📊 Bin Rater", callback_data="bin_rater")],
         [InlineKeyboardButton("💳 Check Balance", callback_data="check_balance")],
     ])
-
+    
 def pre_summary_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
@@ -315,47 +320,52 @@ async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     context.user_data.clear()
-
-    if data in ["start_format", "start_tester"]:
-        context.user_data["mode"] = "normal" if data == "start_format" else "tester"
-        context.user_data["is_tester"] = (data == "start_tester")
+    if data == "start_format":
+        context.user_data["mode"] = "normal"
         context.user_data["all_cards"] = []
         context.user_data["filename"] = None
         await query.edit_message_text("Send cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
         return COLLECTING
-
+    if data == "start_tester":
+        context.user_data["mode"] = "tester"
+        context.user_data["all_cards"] = []
+        context.user_data["filename"] = None
+        await query.edit_message_text("Send tester cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+        return COLLECTING
+    if data == "start_sale":
+        context.user_data["mode"] = "sale"
+        context.user_data["all_cards"] = []
+        context.user_data["filename"] = None
+        context.user_data["target_count"] = 5  # Default minimum for sale
+        await query.edit_message_text("💰 **Sale Mode Activated**\n\nSend cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+        return COLLECTING
+    if data == "sale_settings":
+        await query.edit_message_text(
+            "⚙️ **Sale Settings**\n\n"
+            f"Current Buy Price: `${context.bot_data.get('buy_price', 1.6):.2f}` per card\n"
+            f"Current Sell Price: `${context.bot_data.get('sell_price', 12.0):.2f}` per card\n"
+            f"Minimum Live Cards: `{context.bot_data.get('min_live_for_sale', 5)}`\n\n"
+            "Use commands:\n"
+            "`/setbuy 2.0` - Set buy price\n"
+            "`/setsell 15` - Set sell price\n"
+            "`/setmin 3` - Set minimum live cards required\n"
+            "`/adddeal 3/25` - Add deal (e.g. 3 for $25)\n"
+            "`/adddeal 5/55` - Add another deal",
+            parse_mode='Markdown'
+        )
+        return REP_SETTINGS
     if data == "start_replacement":
         await query.edit_message_text("🔄 **E$ Replacement Menu**", reply_markup=replacement_menu(), parse_mode='Markdown')
         return MENU
-
-    if data == "prepare_reps":
-        context.user_data["mode"] = "replacement"
-        await query.edit_message_text("Send Customer Name:", parse_mode='Markdown')
-        return CUSTOMER_NAME
-
-    if data == "rep_settings":
-        await query.edit_message_text("⚙️ Rep Settings\n\nUse:\n/setvr 85\n/setformat pipe", parse_mode='Markdown')
-        return REP_SETTINGS
-
-    if data == "back_to_main":
-        return await start(update, context)
-
-    if data == "record_sale":
-        context.user_data["mode"] = "sale"
-        await query.edit_message_text("💰 **Record Sale**\n\nSend Customer Name:", parse_mode='Markdown')
-        return CUSTOMER_NAME
-
     if data == "bin_rater":
         await query.edit_message_text("📊 Send BIN rating:\n`410039 8.5 Good for cashout`", parse_mode='Markdown')
         return BIN_RATER_MODE
-
     if data == "check_balance":
         return await check_balance(query, context)
-
     if data == "set_filename":
         await query.edit_message_text("Send the desired filename (without .txt):", parse_mode='Markdown')
         return FILENAME
-
+        
 async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = update.message.text.strip().replace(" ", "_")
     context.user_data["filename"] = filename
@@ -501,35 +511,52 @@ async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return USA_FOREIGN
 
 async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
-    global total_revenue, total_cards_sold, total_tester_cards, total_replacements
-
+    global total_revenue, total_cards_sold, total_tester_cards, total_replacements, sell_price, buy_price
     live_cards = context.user_data.get("live_cards", [])
     live_count = len(live_cards)
     total_cards = len(context.user_data.get("all_cards", []))
     mode = context.user_data.get("mode", "normal")
-    customer = context.user_data.get("customer_name", "Unknown")
     batch_id = context.user_data.get("batch_id", "N/A")
     live_rate = round((live_count / total_cards * 100), 2) if total_cards > 0 else 0.0
     est_time = (datetime.utcnow() - timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S EST")
     filename = context.user_data.get("filename") or f"Output-{random.randint(1000,9999)}"
-
-    if mode == "tester":
-        revenue_text = "🧪 Tester Mode"
-        total_tester_cards += live_count
-    elif mode == "replacement":
-        deduction = round(live_count * REPLACEMENT_COST, 2)
-        total_revenue = round(total_revenue - deduction, 2)
-        total_replacements += live_count
-        revenue_text = f"🔄 Replacement -${deduction}"
-    else:
-        revenue = round(live_count * SELLING_PRICE, 2)
+    if mode == "sale":
+        min_required = context.bot_data.get('min_live_for_sale', 5)
+        
+        if live_count < min_required:
+            await status_msg.edit_text(
+                f"❌ **Sale Requirement Not Met**\n\n"
+                f"Live Cards: `{live_count}`/{min_required}\n"
+                f"You need at least **{min_required}** live cards to get output in Sale mode.",
+                parse_mode='Markdown',
+                reply_markup=main_menu()
+            )
+            context.user_data.clear()
+            return MENU
+        # Calculate price based on deals first, then fallback to sell_price
+        final_price = sell_price
+        for count, price in sorted(deals.items(), reverse=True):
+            if live_count >= count:
+                final_price = price / count
+                break
+        revenue = round(live_count * final_price, 2)
+        cost = round(live_count * buy_price, 2)
+        profit = round(revenue - cost, 2)
+        
         total_revenue += revenue
         total_cards_sold += live_count
-        revenue_text = f"💰 +${revenue}"
-
+        revenue_text = f"💰 Sale: +${revenue:.2f} (Profit: ${profit:.2f})"
+        
+    elif mode == "tester":
+        revenue_text = "🧪 Tester Mode"
+        total_tester_cards += live_count
+    else:
+        revenue = round(live_count * sell_price, 2)
+        total_revenue += revenue
+        total_cards_sold += live_count
+        revenue_text = f"💰 +${revenue:.2f}"
     final_filename = f"{filename}.txt"
     formatted = [format_live_card(raw, mode == "tester") for raw in live_cards]
-
     with open(final_filename, "w", encoding="utf-8") as f:
         f.write("══════════════════════════════════════\n")
         f.write("          E$CO CHECK OUTPUT\n")
@@ -539,7 +566,6 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         f.write("E$CO Post Summary Attached\n")
         f.write(f"Time Checked (EST): {est_time}\n")
         f.write("══════════════════════════════════════\n")
-
     post_text = (
         "📊 **POST SUMMARY**\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -551,13 +577,10 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         f"Time Checked (EST): `{est_time}`\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
-
     await status_msg.edit_text(post_text, parse_mode='Markdown')
     await status_msg.reply_document(document=open(final_filename, "rb"), caption=final_filename)
-
     try: os.remove(final_filename)
     except: pass
-
     await status_msg.reply_text("**E$ Check Has Successfully Completed**", parse_mode='Markdown', reply_markup=main_menu())
     context.user_data.clear()
 
@@ -607,6 +630,38 @@ async def set_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await start(update, context)
+
+async def set_buy_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global buy_price
+    try:
+        buy_price = float(context.args[0])
+        context.bot_data['buy_price'] = buy_price
+        await update.message.reply_text(f"✅ Buy price set to `${buy_price:.2f}` per card", parse_mode='Markdown')
+    except:
+        await update.message.reply_text("Usage: `/setbuy 2.0`")
+async def set_sell_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global sell_price
+    try:
+        sell_price = float(context.args[0])
+        context.bot_data['sell_price'] = sell_price
+        await update.message.reply_text(f"✅ Sell price set to `${sell_price:.2f}` per card", parse_mode='Markdown')
+    except:
+        await update.message.reply_text("Usage: `/setsell 15`")
+async def set_min_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global min_live_for_sale
+    try:
+        min_live_for_sale = int(context.args[0])
+        context.bot_data['min_live_for_sale'] = min_live_for_sale
+        await update.message.reply_text(f"✅ Minimum live cards for sale set to `{min_live_for_sale}`", parse_mode='Markdown')
+    except:
+        await update.message.reply_text("Usage: `/setmin 5`")
+async def add_deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        deal = context.args[0]
+        count, price = map(int, deal.split('/'))
+        deals[count] = price
+        await update.message.reply_text(f"✅ Deal added: **{count} for ${price}**", parse_mode='Markdown')
+    except:
 
 def build_handler():
     return ConversationHandler(
