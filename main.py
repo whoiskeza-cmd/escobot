@@ -323,7 +323,6 @@ async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     data = query.data
-
     if data == "confirm_check":
         cards = context.user_data.get("all_cards", [])
         if not cards:
@@ -334,28 +333,22 @@ async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         max_polls = 30  # You can adjust this
         await check_cards_with_storm(cards, status_msg, max_polls, context)
         return MENU
-
     elif data == "set_filename":
         await query.edit_message_text("Please send the desired filename (without .txt):")
         return FILENAME
-
     elif data == "remove_last4":
         await query.edit_message_text("🗑️ Send the last 4 digits of the card you want to remove:")
         return REMOVE_LAST4
-
     elif data == "add_more":
         await query.edit_message_text("Send more cards or upload a .txt file.\nType /cancel to stop.")
         return ADD_MORE_CARDS
-
     elif data == "cancel":
         await query.edit_message_text("✅ Operation cancelled.", reply_markup=main_menu())
         context.user_data.clear()
         return MENU
-
     else:
         await query.edit_message_text("Unknown option.", reply_markup=main_menu())
         return MENU
-
 async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = update.message.text.strip().replace(" ", "_").replace(".txt", "")
     if not filename:
@@ -624,34 +617,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====================== STATES ======================
 MENU, COLLECTING, USA_FOREIGN, SUMMARY, ADD_MORE_CARDS, REMOVE_LAST4, BIN_RATER_MODE, FILENAME, CUSTOMER_NAME, TARGET_COUNT, REP_SETTINGS = range(11)
 
-async def pre_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    if data == "add_more":
-        await query.edit_message_text("Send more cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
-        return ADD_MORE_CARDS
-    if data == "set_filename":
-        await query.edit_message_text("Send the desired filename (without .txt):", parse_mode='Markdown')
-        return FILENAME
-    if data == "remove_last4":
-        await query.edit_message_text("🗑️ Send last 4 digits of the card you want to remove:", parse_mode='Markdown')
-        return REMOVE_LAST4
-    if data == "confirm_check":
-        cards = context.user_data.get("all_cards", [])
-        if not cards:
-            await query.edit_message_text("❌ No cards to check.", reply_markup=main_menu())
-            return MENU
-        
-        status_msg = await query.edit_message_text("🚀 Starting E$ CHECK...")
-        max_polls = get_max_polls(len(cards))
-        await check_cards_with_storm(cards, status_msg, max_polls, context)
-        return MENU
-    if data == "cancel":
-        await query.edit_message_text("✅ Operation cancelled.", reply_markup=main_menu())
-        context.user_data.clear()
-        return MENU
-
 async def show_pre_summary_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cards = context.user_data.get("all_cards", [])
     total = len(cards)
@@ -881,6 +846,12 @@ async def add_more_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_pre_summary_from_message(update, context)
     return SUMMARY
 
+async def back_to_main_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data.clear()
+    await start(update, context)
+    return MENU
 
 if __name__ == "__main__":
     print("✅ E$CO Bot v14.7 Starting on Railway...")
