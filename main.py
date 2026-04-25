@@ -71,6 +71,59 @@ def get_random_balance(card: str, is_tester: bool = False) -> float:
 
 def get_random_ip() -> str:
     return f"{random.randint(25,195)}.{random.randint(15,245)}.{random.randint(20,230)}.{random.randint(35,220)}"
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("⛔ Unauthorized. This bot is private.")
+        return ConversationHandler.END
+    global total_revenue, total_cards_sold, total_tester_cards, total_replacements
+    profit = round(total_revenue - (total_cards_sold * buy_price) - (total_replacements * REPLACEMENT_COST), 2)
+    welcome_text = (
+        "🔥 **E$CO CONTROL PANEL** 🔥\n\n"
+        f"Welcome, @{update.effective_user.username}\n\n"
+        f"💵 Revenue : `${total_revenue:.2f}`\n"
+        f"📦 Sold    : `{total_cards_sold}`\n"
+        f"🧪 Tester  : `{total_tester_cards}`\n"
+        f"🔄 Repl    : `{total_replacements}`\n"
+        f"📈 Profit  : `${profit:.2f}`\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\nChoose option:"
+    )
+    if update.message:
+        await update.message.reply_text(welcome_text, reply_markup=main_menu(), parse_mode='Markdown')
+    else:
+        await update.callback_query.edit_message_text(welcome_text, reply_markup=main_menu(), parse_mode='Markdown')
+    
+    context.user_data.clear()
+    return MENU
+async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    context.user_data.clear()
+    if data in ["start_format", "start_tester"]:
+        mode = "normal" if data == "start_format" else "tester"
+        context.user_data["mode"] = mode
+        context.user_data["all_cards"] = []
+        context.user_data["accumulated_live"] = []
+        context.user_data["filename"] = None
+        await query.edit_message_text(f"Send {'tester ' if mode == 'tester' else ''}cards or .txt file.\n/cancel to stop.", parse_mode='Markdown')
+        return COLLECTING
+    if data == "start_sale":
+        context.user_data["mode"] = "sale"
+        await query.edit_message_text("💰 **Sale Mode**\n\nSend Customer Name:", parse_mode='Markdown')
+        return CUSTOMER_NAME
+    if data == "start_replacement":
+        context.user_data["mode"] = "replacement"
+        await query.edit_message_text("🔄 **Replacement Mode**\n\nSend Customer Name:", parse_mode='Markdown')
+        return CUSTOMER_NAME
+    if data == "sale_settings":
+        await query.edit_message_text("⚙️ Sale Settings\nUse commands to change values.", parse_mode='Markdown')
+        return REP_SETTINGS
+    if data == "bin_rater":
+        await query.edit_message_text("📊 Send BIN rating:\n`410039 8.5 Good for cashout`", parse_mode='Markdown')
+        return BIN_RATER_MODE
+    if data == "check_balance":
+        return await check_balance(query, context)
+    return MENU
 
 def get_max_polls(total_cards: int) -> int:
     if total_cards < 10: return 4
