@@ -112,30 +112,31 @@ def replacement_menu():
         [InlineKeyboardButton("⬅️ Back", callback_data="back_to_main")],
     ])
 
-# ====================== CLEAN FORMATTER ======================
+# ====================== FIXED FORMATTER ======================
 def format_live_card(raw_line: str, is_tester: bool = False) -> str:
     try:
         parts = [p.strip() for p in raw_line.replace("=>", "|").split('|')]
         
-        card_number = parts[0]
-        expiry      = parts[1] if len(parts) > 1 else "00/00"
-        cvv         = parts[2] if len(parts) > 2 else "000"
-        name        = parts[3] if len(parts) > 3 else "N/A"
-        address     = parts[4] if len(parts) > 4 else "N/A"
-        city        = parts[5] if len(parts) > 5 else "N/A"
-        state       = parts[6] if len(parts) > 6 else "N/A"
-        zip_code    = parts[7] if len(parts) > 7 else "N/A"
-        phone       = parts[9] if len(parts) > 9 else "N/A"
-        email       = parts[10] if len(parts) > 10 else "N/A"
+        card    = parts[0]
+        month   = parts[1]
+        year    = parts[2]
+        cvv     = parts[3]
+        name    = parts[4]
+        address = parts[5]
+        city    = parts[6]
+        state   = parts[7]
+        zipcode = parts[8]
+        country = parts[9]
+        phone   = parts[10]
+        email   = parts[11] if len(parts) > 11 else "N/A"
 
-        mm, yy = expiry.split('/') if '/' in expiry else (expiry[:2], expiry[-2:])
-        balance = get_random_balance(card_number, is_tester)
+        balance = get_random_balance(card, is_tester)
         ip = get_random_ip()
-        info = get_bin_info(card_number)
+        info = get_bin_info(card)
         base_vr = info.get("vr", 45)
         vr = max(5, min(99, int(base_vr + random.gauss(0, 8))))
         
-        bin_data = BIN_RATER.get(card_number[:6], {"rating": "N/A", "suggestion": "No rating added yet"})
+        bin_data = BIN_RATER.get(card[:6], {"rating": "N/A", "suggestion": "No rating added yet"})
 
         output = [
             "══════════════════════════════════════",
@@ -143,22 +144,22 @@ def format_live_card(raw_line: str, is_tester: bool = False) -> str:
             "══════════════════════════════════════",
             f"💰 Balance : ${balance:.2f}",
             f"👤 Name    : {name}",
-            f"💳 Card    : {card_number}",
-            f"📅 Expiry  : {mm}/{yy}",
+            f"💳 Card    : {card}",
+            f"📅 Expiry  : {month}/{year}",
             f"🔒 CVV     : {cvv}",
             f"🏦 Bank    : {info.get('bank', 'UNKNOWN')}",
-            f"🌍 Country : {info.get('country', 'UNKNOWN')} • {info.get('brand', 'UNKNOWN')} {info.get('level', 'STANDARD')}",
+            f"🌍 Country : {country} • {info.get('brand', 'UNKNOWN')} {info.get('level', 'STANDARD')}",
             "",
             "📍 Billing Address:",
             f"   {address}",
-            f"   {city}, {state} {zip_code}",
-            f"   Phone : {phone}",
-            f"   Email : {email}",
+            f"   {city}, {state} {zipcode}",
+            f"   Phone  : {phone}",
+            f"   Email  : {email}",
             "",
-            f"🌐 IP : {ip}",
+            f"🌐 IP      : {ip}",
             f"🕒 Checked : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "══════════════════════════════════════",
-            f"BIN Rate : {bin_data['rating']} | {bin_data['suggestion']}",
+            f"BIN Rate   : {bin_data['rating']} | {bin_data['suggestion']}",
             "══════════════════════════════════════"
         ]
         
@@ -167,8 +168,8 @@ def format_live_card(raw_line: str, is_tester: bool = False) -> str:
             
         return "\n".join(output)
         
-    except Exception:
-        return f"Parse Error: {raw_line}"
+    except Exception as e:
+        return f"Parse Error: {raw_line}\nError: {str(e)}"
 
 # ====================== CHECKER ======================
 def is_live(item: dict) -> bool:
@@ -607,7 +608,7 @@ def build_handler():
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(build_handler())
-    print("✅ E$CO Bot v13.3 - Clean & Fixed Formatting")
+    print("✅ E$CO Bot v13.4 - Fixed Field Mapping + Clean Formatting")
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
