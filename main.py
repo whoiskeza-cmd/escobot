@@ -176,6 +176,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return MENU
 
+async def safe_edit(message, text: str, **kwargs):
+    """Safely edit message whether it's from callback or normal message"""
+    try:
+        if hasattr(message, 'edit_message_text'):
+            await message.edit_message_text(text, **kwargs)
+        else:
+            await message.reply_text(text, **kwargs)
+    except Exception:
+        try:
+            await message.reply_text(text, **kwargs)
+        except:
+            pass  # Last resort
+
+
 async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -366,50 +380,49 @@ async def check_cards_with_storm(cards: List[str], status_msg, context: ContextT
     seen = set()
     total_cards = len(cards)
     
-    # Dynamic poll count as requested
     if total_cards < 8:
         max_polls = 4
     elif total_cards > 15:
         max_polls = 15
     else:
         max_polls = 10
-    
+
     try:
         payload = {"cards": cards}
         r = session.post(f"{BASE_URL}/check", headers=HEADERS, json=payload, timeout=40)
         response_json = r.json()
         
         batch_id = None
-        for key_path in [
-            ["batch_id"], ["id"], ["data", "batch_id"], ["data", "id"]
-        ]:
+        for path in [["batch_id"], ["id"], ["data", "batch_id"], ["data", "id"]]:
             temp = response_json
-            for k in key_path:
-                temp = temp.get(k) if isinstance(temp, dict) else None
-                if temp is None:
+            for key in path:
+                temp = temp.get(key) if isinstance(temp, dict) else None
+                if temp is None: 
                     break
             if temp:
                 batch_id = temp
                 break
 
         if not batch_id:
-            await status_msg.edit_text("❌ Could not extract batch_id.")
+            await safe_edit(status_msg, "❌ Could not extract batch_id from API.")
             return MENU
 
-        await status_msg.edit_text(
+        await safe_edit(
+            status_msg, 
             f"✅ Batch submitted!\nBatch ID: `{batch_id}`\nCards: {total_cards} | Polling {max_polls} times...",
             parse_mode='Markdown'
         )
         
     except Exception as e:
-        await status_msg.edit_text(f"❌ Submission Error: {str(e)}")
+        await safe_edit(status_msg, f"❌ Submission Error: {str(e)}")
         return MENU
 
     await asyncio.sleep(INITIAL_WAIT)
     poll_url = f"{BASE_URL}/check/{batch_id}"
     
     for poll_count in range(max_polls):
-        await status_msg.edit_text(
+        await safe_edit(
+            status_msg,
             f"🔄 Polling: {poll_count+1}/{max_polls} | Live: {len(live_raw_cards)}",
             parse_mode='Markdown'
         )
@@ -420,13 +433,11 @@ async def check_cards_with_storm(cards: List[str], status_msg, context: ContextT
                 continue
                 
             data = resp.json()
-            items = (
-                data.get("data", {}).get("items") or
-                data.get("items") or data.get("results") or data.get("checks") or []
-            )
+            items = data.get("data", {}).get("items") or data.get("items") or data.get("results") or []
             
             for item in items:
-                if not isinstance(item, dict): continue
+                if not isinstance(item, dict): 
+                    continue
                 card_num = str(item.get("card_number") or item.get("cc") or item.get("card") or "").strip()
                 if card_num and card_num not in seen and is_live(item):
                     seen.add(card_num)
@@ -440,20 +451,19 @@ async def check_cards_with_storm(cards: List[str], status_msg, context: ContextT
             
         await asyncio.sleep(POLL_INTERVAL)
 
-    # === CRITICAL FIX: Force save and continue even if zero lives ===
     context.user_data["accumulated_live"] = live_raw_cards
-    context.user_data.setdefault("all_cards", cards)   # safety
     await handle_live_accumulation(status_msg, context)
     return MENU
 
 async def handle_live_accumulation(status_msg, context: ContextTypes.DEFAULT_TYPE):
-    mode = context.user_data.get("mode", "normal")
     accumulated = context.user_data.get("accumulated_live", [])
+    mode = context.user_data.get("mode", "normal")
     
     context.user_data["live_cards"] = accumulated[:]
-    context.user_data["extra_cards"] = []  # For tester mode we don't split
+    context.user_data["extra_cards"] = []  
     
     await show_post_summary(status_msg, context)
+
 
     
     # Safety: always have these keys
