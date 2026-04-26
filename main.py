@@ -51,16 +51,21 @@ def get_bin_info(card_number: str):
     default = {"brand": "UNKNOWN", "type": "CREDIT", "level": "STANDARD", "bank": "UNKNOWN BANK", "country": "UNITED STATES", "vr": 45}
     return BIN_DATABASE.get(prefix, default)
 
-def get_random_balance(is_tester: bool = False) -> float:
+def get_random_balance(is_tester: bool = False, card_number: str = "") -> float:
     if is_tester:
         return round(random.uniform(800, 1850), 2)
-    high_value_bins = ["410039", "517805", "542418", "371290"]
-    if card_number[:6] in high_value_bins and random.random() < 0.032:  # fixed variable name
-        return round(random.uniform(2500, 4850), 2)
+    
+    # Less than 5% chance of balance over $1000
+    # 25% chance of balance between $150-$500
     roll = random.random()
-    if roll < 0.45: return round(random.uniform(180, 890), 2)
-    elif roll < 0.85: return round(random.uniform(920, 1680), 2)
-    return round(random.uniform(1720, 2420), 2)
+    
+    if roll < 0.05:                    # 5% chance → $1000+
+        return round(random.uniform(1020, 2450), 2)
+    elif roll < 0.30:                  # Next 25% → $150-$500
+        return round(random.uniform(150, 500), 2)
+    else:                              # Remaining 70% → $520-$980
+        return round(random.uniform(520, 980), 2)
+
 
 def get_random_ip() -> str:
     return f"{random.randint(25,195)}.{random.randint(15,245)}.{random.randint(20,230)}.{random.randint(35,220)}"
@@ -359,86 +364,74 @@ async def get_target_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def check_cards_with_storm(cards: List[str], status_msg, context: ContextTypes.DEFAULT_TYPE):
     live_raw_cards = []
     seen = set()
+    total_cards = len(cards)
+    
+    # Dynamic poll count as requested
+    if total_cards < 8:
+        max_polls = 4
+    elif total_cards > 15:
+        max_polls = 15
+    else:
+        max_polls = 10
     
     try:
         payload = {"cards": cards}
         r = session.post(f"{BASE_URL}/check", headers=HEADERS, json=payload, timeout=40)
-        
         response_json = r.json()
         
-        # Extract batch_id from multiple possible locations
         batch_id = None
-        locations = [
-            response_json.get("batch_id"),
-            response_json.get("id"),
-            response_json.get("data", {}).get("batch_id"),
-            response_json.get("data", {}).get("id"),
-            response_json.get("batchId"),
-        ]
-        
-        for candidate in locations:
-            if candidate:
-                batch_id = candidate
+        for key_path in [
+            ["batch_id"], ["id"], ["data", "batch_id"], ["data", "id"]
+        ]:
+            temp = response_json
+            for k in key_path:
+                temp = temp.get(k) if isinstance(temp, dict) else None
+                if temp is None:
+                    break
+            if temp:
+                batch_id = temp
                 break
+
         if not batch_id:
-            await status_msg.edit_text(
-                "❌ Could not find batch_id in response.\n\n"
-                f"Status: {r.status_code}\n"
-                f"Keys found: {list(response_json.keys())}\n"
-                f"Response: {str(response_json)[:500]}"
-            )
+            await status_msg.edit_text("❌ Could not extract batch_id.")
             return MENU
+
         await status_msg.edit_text(
-            f"✅ Batch submitted successfully!\n"
-            f"Batch ID: `{batch_id}`\n"
-            f"Accepted: {response_json.get('data', {}).get('accepted_count', 'N/A')}\n"
-            f"Waiting {INITIAL_WAIT} seconds before polling...",
+            f"✅ Batch submitted!\nBatch ID: `{batch_id}`\nCards: {total_cards} | Polling {max_polls} times...",
             parse_mode='Markdown'
         )
         
     except Exception as e:
-        await status_msg.edit_text(f"❌ Submission Error: {str(e)}\nResponse: {r.text[:300] if 'r' in locals() else ''}")
+        await status_msg.edit_text(f"❌ Submission Error: {str(e)}")
         return MENU
+
     await asyncio.sleep(INITIAL_WAIT)
-    
     poll_url = f"{BASE_URL}/check/{batch_id}"
     
-    for poll_count in range(25):
+    for poll_count in range(max_polls):
         await status_msg.edit_text(
-            f"🔄 Polling: {poll_count+1}/25 | Live found: {len(live_raw_cards)}",
+            f"🔄 Polling: {poll_count+1}/{max_polls} | Live: {len(live_raw_cards)}",
             parse_mode='Markdown'
         )
         
         try:
             resp = session.get(poll_url, headers=HEADERS, timeout=30)
             if resp.status_code not in (200, 201):
-                await asyncio.sleep(POLL_INTERVAL)
                 continue
                 
             data = resp.json()
-            
             items = (
                 data.get("data", {}).get("items") or
-                data.get("items") or
-                data.get("results") or
-                data.get("checks") or
-                []
+                data.get("items") or data.get("results") or data.get("checks") or []
             )
             
             for item in items:
-                if not isinstance(item, dict):
-                    continue
-                    
-                card_num = str(
-                    item.get("card_number") or item.get("cc") or 
-                    item.get("card") or item.get("number") or ""
-                ).strip()
-                
+                if not isinstance(item, dict): continue
+                card_num = str(item.get("card_number") or item.get("cc") or item.get("card") or "").strip()
                 if card_num and card_num not in seen and is_live(item):
                     seen.add(card_num)
                     for raw in cards:
-                        raw_card = raw.split('|')[0].strip()
-                        if raw_card[-4:] == card_num[-4:]:
+                        if raw.split("|")[0].strip()[-4:] == card_num[-4:]:
                             if raw not in live_raw_cards:
                                 live_raw_cards.append(raw)
                             break
@@ -446,7 +439,10 @@ async def check_cards_with_storm(cards: List[str], status_msg, context: ContextT
             pass
             
         await asyncio.sleep(POLL_INTERVAL)
+
+    # === CRITICAL FIX: Force save and continue even if zero lives ===
     context.user_data["accumulated_live"] = live_raw_cards
+    context.user_data.setdefault("all_cards", cards)   # safety
     await handle_live_accumulation(status_msg, context)
     return MENU
 
@@ -454,6 +450,13 @@ async def handle_live_accumulation(status_msg, context: ContextTypes.DEFAULT_TYP
     mode = context.user_data.get("mode", "normal")
     target = context.user_data.get("target_count", 5)
     accumulated = context.user_data.get("accumulated_live", [])
+    
+    # Safety: always have these keys
+    context.user_data["live_cards"] = accumulated[:target] if mode != "tester" else accumulated[:]
+    context.user_data["extra_cards"] = accumulated[target:] if mode != "tester" and len(accumulated) > target else []
+    
+    await show_post_summary(status_msg, context)
+
 
     if mode == "tester":
         context.user_data["live_cards"] = accumulated[:]
@@ -475,49 +478,89 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     live_cards = context.user_data.get("live_cards", [])
     extra_cards = context.user_data.get("extra_cards", [])
     mode = context.user_data.get("mode", "normal")
-    customer = context.user_data.get("customer_name", "Not Required")
+    customer = context.user_data.get("customer_name", "N/A")
     filename_base = context.user_data.get("filename", f"ESCO_{mode.upper()}_{datetime.now().strftime('%Y%m%d_%H%M')}")
     filename = f"{filename_base}.txt"
 
+    # Format the live cards
     formatted = [format_live_card(raw, mode == "tester") for raw in live_cards]
 
+    # Always create the output file (even if no lives)
     with open(filename, "w", encoding="utf-8") as f:
         f.write("══════════════ E$CO CHECK OUTPUT ══════════════\n")
-        f.write(f"Mode     : {mode.upper()}\nCustomer : {customer}\n")
-        f.write(f"Delivered: {len(live_cards)}\nTotal Live: {len(live_cards)+len(extra_cards)}\n")
+        f.write(f"Mode     : {mode.upper()}\n")
+        f.write(f"Customer : {customer}\n")
+        f.write(f"Delivered: {len(live_cards)}\n")
+        f.write(f"Total Live: {len(live_cards) + len(extra_cards)}\n")
         f.write(f"Time     : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
-        f.write("\n\n".join(formatted))
+        
+        if formatted:
+            f.write("\n\n".join(formatted))
+        else:
+            f.write("\nNo live cards found in this batch.\n")
 
+    # Update global statistics
     if mode == "sale" and live_cards:
         global total_revenue, total_cards_sold
         total_revenue += len(live_cards) * sell_price
         total_cards_sold += len(live_cards)
 
-    if mode == "tester":
+    if mode == "tester" and live_cards:
         global total_tester_cards
         total_tester_cards += len(live_cards)
 
+    # Build final message
     text = (
-        f"✅ **TARGET REACHED SUCCESSFULLY**\n"
+        f"✅ **CHECK COMPLETED SUCCESSFULLY**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Live Cards : `{len(live_cards)}`\n"
         f"Extra      : `{len(extra_cards)}`\n"
         f"Mode       : `{mode.upper()}`\n"
-        f"Customer   : `{customer}`\n\n"
-        "What next?"
+        f"Customer   : `{customer}`\n"
+        f"Filename   : `{filename}`\n\n"
+        "Choose an option below:"
     )
 
+    # Build keyboard
     keyboard = [[InlineKeyboardButton("📤 Send Main File", callback_data="send_main")]]
+    
     if extra_cards:
         keyboard.append([InlineKeyboardButton("📤 Send Extra File", callback_data="send_extra")])
+    
     keyboard.extend([
+        [InlineKeyboardButton("🔄 Check More Cards", callback_data="start_format")],
         [InlineKeyboardButton("🏠 Back to Main Menu", callback_data="back_to_main")]
     ])
 
-    await status_msg.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    try:
+        await status_msg.edit_message_text(
+            text, 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
+            parse_mode='Markdown'
+        )
+    except:
+        # Fallback if edit fails (message too old)
+        await status_msg.reply_text(
+            text, 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
+            parse_mode='Markdown'
+        )
+
+    # Store filenames for the button handler
     context.user_data["main_filename"] = filename
-    context.user_data["extra_filename"] = f"{filename_base}_EXTRA.txt" if extra_cards else None
-    context.user_data["extra_cards"] = extra_cards
+    if extra_cards:
+        extra_filename = f"{filename_base}_EXTRA.txt"
+        context.user_data["extra_filename"] = extra_filename
+        
+        # Also create the extra file
+        with open(extra_filename, "w", encoding="utf-8") as f:
+            f.write("══════════════ E$CO EXTRA LIVE CARDS ══════════════\n")
+            f.write(f"Customer : {customer}\n")
+            f.write(f"Total Extra: {len(extra_cards)}\n\n")
+            extra_formatted = [format_live_card(raw, mode == "tester") for raw in extra_cards]
+            f.write("\n\n".join(extra_formatted))
+    else:
+        context.user_data["extra_filename"] = None
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
