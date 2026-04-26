@@ -448,8 +448,13 @@ async def check_cards_with_storm(cards: List[str], status_msg, context: ContextT
 
 async def handle_live_accumulation(status_msg, context: ContextTypes.DEFAULT_TYPE):
     mode = context.user_data.get("mode", "normal")
-    target = context.user_data.get("target_count", 5)
     accumulated = context.user_data.get("accumulated_live", [])
+    
+    context.user_data["live_cards"] = accumulated[:]
+    context.user_data["extra_cards"] = []  # For tester mode we don't split
+    
+    await show_post_summary(status_msg, context)
+
     
     # Safety: always have these keys
     context.user_data["live_cards"] = accumulated[:target] if mode != "tester" else accumulated[:]
@@ -479,13 +484,14 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     extra_cards = context.user_data.get("extra_cards", [])
     mode = context.user_data.get("mode", "normal")
     customer = context.user_data.get("customer_name", "N/A")
-    filename_base = context.user_data.get("filename", f"ESCO_{mode.upper()}_{datetime.now().strftime('%Y%m%d_%H%M')}")
+    
+    filename_base = context.user_data.get("filename")
+    if not filename_base:
+        filename_base = f"ESCO_{mode.upper()}_{datetime.now().strftime('%Y%m%d_%H%M')}"
+    
     filename = f"{filename_base}.txt"
-
-    # Format the live cards
     formatted = [format_live_card(raw, mode == "tester") for raw in live_cards]
-
-    # Always create the output file (even if no lives)
+    # Write main file
     with open(filename, "w", encoding="utf-8") as f:
         f.write("══════════════ E$CO CHECK OUTPUT ══════════════\n")
         f.write(f"Mode     : {mode.upper()}\n")
@@ -497,19 +503,24 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         if formatted:
             f.write("\n\n".join(formatted))
         else:
-            f.write("\nNo live cards found in this batch.\n")
-
-    # Update global statistics
+            f.write("\nNo live cards found.\n")
+    # Write extra file if any
+    extra_filename = None
+    if extra_cards:
+        extra_filename = f"{filename_base}_EXTRA.txt"
+        extra_formatted = [format_live_card(raw, mode == "tester") for raw in extra_cards]
+        with open(extra_filename, "w", encoding="utf-8") as f:
+            f.write("══════════════ E$CO EXTRA LIVE CARDS ══════════════\n")
+            f.write(f"Total Extra: {len(extra_cards)}\n\n")
+            f.write("\n\n".join(extra_formatted))
+    # Update stats
     if mode == "sale" and live_cards:
         global total_revenue, total_cards_sold
         total_revenue += len(live_cards) * sell_price
         total_cards_sold += len(live_cards)
-
     if mode == "tester" and live_cards:
         global total_tester_cards
         total_tester_cards += len(live_cards)
-
-    # Build final message
     text = (
         f"✅ **CHECK COMPLETED SUCCESSFULLY**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -520,10 +531,9 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         f"Filename   : `{filename}`\n\n"
         "Choose an option below:"
     )
-
-    # Build keyboard
-    keyboard = [[InlineKeyboardButton("📤 Send Main File", callback_data="send_main")]]
-    
+    keyboard = [
+        [InlineKeyboardButton("📤 Send Main File", callback_data="send_main")],
+    ]
     if extra_cards:
         keyboard.append([InlineKeyboardButton("📤 Send Extra File", callback_data="send_extra")])
     
@@ -531,36 +541,16 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔄 Check More Cards", callback_data="start_format")],
         [InlineKeyboardButton("🏠 Back to Main Menu", callback_data="back_to_main")]
     ])
-
-    try:
-        await status_msg.edit_message_text(
-            text, 
-            reply_markup=InlineKeyboardMarkup(keyboard), 
-            parse_mode='Markdown'
-        )
-    except:
-        # Fallback if edit fails (message too old)
-        await status_msg.reply_text(
-            text, 
-            reply_markup=InlineKeyboardMarkup(keyboard), 
-            parse_mode='Markdown'
-        )
-
-    # Store filenames for the button handler
+    await status_msg.edit_message_text(
+        text, 
+        reply_markup=InlineKeyboardMarkup(keyboard), 
+        parse_mode='Markdown'
+    )
+    # Store in context for button handler
     context.user_data["main_filename"] = filename
-    if extra_cards:
-        extra_filename = f"{filename_base}_EXTRA.txt"
-        context.user_data["extra_filename"] = extra_filename
-        
-        # Also create the extra file
-        with open(extra_filename, "w", encoding="utf-8") as f:
-            f.write("══════════════ E$CO EXTRA LIVE CARDS ══════════════\n")
-            f.write(f"Customer : {customer}\n")
-            f.write(f"Total Extra: {len(extra_cards)}\n\n")
-            extra_formatted = [format_live_card(raw, mode == "tester") for raw in extra_cards]
-            f.write("\n\n".join(extra_formatted))
-    else:
-        context.user_data["extra_filename"] = None
+    context.user_data["extra_filename"] = extra_filename
+    context.user_data["current_status_msg"] = status_msg  # backup reference
+
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -568,18 +558,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data == "send_main":
-        fn = context.user_data.get("main_filename")
-        if fn and os.path.exists(fn):
-            await query.message.reply_document(open(fn, "rb"), filename=os.path.basename(fn))
-            os.remove(fn)
-    elif data == "send_extra":
-        fn = context.user_data.get("extra_filename")
-        if fn and os.path.exists(fn):
-            await query.message.reply_document(open(fn, "rb"), filename=os.path.basename(fn))
-            os.remove(fn)
+        filename = context.user_data.get("main_filename")
+        if filename and os.path.exists(filename):
+            await query.message.reply_document(
+                open(filename, "rb"), 
+                filename=os.path.basename(filename)
+            )
+            os.remove(filename)
+            await query.edit_message_text("✅ Main file sent and cleaned up.")
+        else:
+            await query.edit_message_text("❌ File not found.")
 
-    await query.edit_message_text("✅ Done!", reply_markup=main_menu())
-    context.user_data.clear()
+    elif data == "send_extra":
+        filename = context.user_data.get("extra_filename")
+        if filename and os.path.exists(filename):
+            await query.message.reply_document(
+                open(filename, "rb"), 
+                filename=os.path.basename(filename)
+            )
+            os.remove(filename)
+            await query.edit_message_text("✅ Extra file sent and cleaned up.")
+        else:
+            await query.edit_message_text("❌ Extra file not found.")
+
+    elif data in ["back_to_main", "start_format"]:
+        # Reset and go back to main menu
+        context.user_data.clear()
+        await start(update, context)  # This will show main menu
+        return
+
+    # Don't clear context immediately for send buttons
+    if data not in ["send_main", "send_extra"]:
+        context.user_data.clear()
+
 
 async def check_balance(query, context: ContextTypes.DEFAULT_TYPE):
     try:
