@@ -364,57 +364,64 @@ async def check_cards_with_storm(cards: List[str], status_msg, context: ContextT
         payload = {"cards": cards}
         r = session.post(f"{BASE_URL}/check", headers=HEADERS, json=payload, timeout=40)
         
-        if r.status_code != 200:
-            await status_msg.edit_text(f"❌ API Error: HTTP {r.status_code}\n{r.text[:200]}")
-            return MENU
         response_json = r.json()
         
-        # More robust batch_id extraction - this is the most common failure point
+        # Extract batch_id from multiple possible locations
         batch_id = None
-        for key in ["batch_id", "id", "batchId", "batch", "request_id", "uuid"]:
-            batch_id = response_json.get(key)
-            if batch_id is not None:
-                break
-                
-        # Also check nested structures
-        if not batch_id and isinstance(response_json.get("data"), dict):
-            data = response_json.get("data")
-            for key in ["batch_id", "id", "batchId"]:
-                batch_id = data.get(key)
-                if batch_id is not None:
-                    break
+        locations = [
+            response_json.get("batch_id"),
+            response_json.get("id"),
+            response_json.get("data", {}).get("batch_id"),
+            response_json.get("data", {}).get("id"),
+            response_json.get("batchId"),
+        ]
         
+        for candidate in locations:
+            if candidate:
+                batch_id = candidate
+                break
         if not batch_id:
             await status_msg.edit_text(
-                "❌ Failed to get batch_id from API response.\n\n"
-                f"Response keys: {list(response_json.keys())}\n"
-                f"Full response: {str(response_json)[:400]}"
+                "❌ Could not find batch_id in response.\n\n"
+                f"Status: {r.status_code}\n"
+                f"Keys found: {list(response_json.keys())}\n"
+                f"Response: {str(response_json)[:500]}"
             )
             return MENU
-        await status_msg.edit_text(f"✅ Batch submitted successfully.\nBatch ID: `{batch_id}`\nWaiting {INITIAL_WAIT}s before polling...", parse_mode='Markdown')
+        await status_msg.edit_text(
+            f"✅ Batch submitted successfully!\n"
+            f"Batch ID: `{batch_id}`\n"
+            f"Accepted: {response_json.get('data', {}).get('accepted_count', 'N/A')}\n"
+            f"Waiting {INITIAL_WAIT} seconds before polling...",
+            parse_mode='Markdown'
+        )
         
     except Exception as e:
-        await status_msg.edit_text(f"❌ Submission Error: {str(e)}")
+        await status_msg.edit_text(f"❌ Submission Error: {str(e)}\nResponse: {r.text[:300] if 'r' in locals() else ''}")
         return MENU
     await asyncio.sleep(INITIAL_WAIT)
     
     poll_url = f"{BASE_URL}/check/{batch_id}"
+    
     for poll_count in range(25):
-        await status_msg.edit_text(f"🔄 Polling: {poll_count+1}/25 | Live found: {len(live_raw_cards)}", parse_mode='Markdown')
+        await status_msg.edit_text(
+            f"🔄 Polling: {poll_count+1}/25 | Live found: {len(live_raw_cards)}",
+            parse_mode='Markdown'
+        )
         
         try:
             resp = session.get(poll_url, headers=HEADERS, timeout=30)
-            if resp.status_code != 200:
+            if resp.status_code not in (200, 201):
+                await asyncio.sleep(POLL_INTERVAL)
                 continue
                 
             data = resp.json()
             
-            # Multiple possible response structures
             items = (
-                data.get("data", {}).get("items") or 
-                data.get("items") or 
-                data.get("results") or 
-                data.get("data", {}).get("checks") or 
+                data.get("data", {}).get("items") or
+                data.get("items") or
+                data.get("results") or
+                data.get("checks") or
                 []
             )
             
@@ -423,27 +430,26 @@ async def check_cards_with_storm(cards: List[str], status_msg, context: ContextT
                     continue
                     
                 card_num = str(
-                    item.get("card_number") or 
-                    item.get("cc") or 
-                    item.get("card") or 
-                    item.get("number") or ""
+                    item.get("card_number") or item.get("cc") or 
+                    item.get("card") or item.get("number") or ""
                 ).strip()
                 
                 if card_num and card_num not in seen and is_live(item):
                     seen.add(card_num)
-                    # Match back to original raw line by last 4 digits
                     for raw in cards:
-                        if raw.split('|')[0].strip()[-4:] == card_num[-4:]:
+                        raw_card = raw.split('|')[0].strip()
+                        if raw_card[-4:] == card_num[-4:]:
                             if raw not in live_raw_cards:
                                 live_raw_cards.append(raw)
                             break
-        except Exception:
-            pass  # Silent fail on individual poll attempts
+        except:
+            pass
             
         await asyncio.sleep(POLL_INTERVAL)
     context.user_data["accumulated_live"] = live_raw_cards
     await handle_live_accumulation(status_msg, context)
     return MENU
+
 async def handle_live_accumulation(status_msg, context: ContextTypes.DEFAULT_TYPE):
     mode = context.user_data.get("mode", "normal")
     target = context.user_data.get("target_count", 5)
