@@ -494,11 +494,11 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
     customer = context.user_data.get("customer_name", "N/A")
     
     filename_base = context.user_data.get("filename") or f"ESCO_{mode.upper()}_{datetime.now().strftime('%Y%m%d_%H%M')}"
-    filename = f"{filename_base}.txt"
+    main_filename = f"{filename_base}.txt"
 
     formatted = [format_live_card(raw, mode == "tester") for raw in live_cards]
 
-    with open(filename, "w", encoding="utf-8") as f:
+    with open(main_filename, "w", encoding="utf-8") as f:
         f.write("══════════════ E$CO CHECK OUTPUT ══════════════\n")
         f.write(f"Mode     : {mode.upper()}\nCustomer : {customer}\n")
         f.write(f"Delivered: {len(live_cards)}\nTotal Live: {len(live_cards)+len(extra_cards)}\n")
@@ -523,16 +523,16 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         f"Extra      : `{len(extra_cards)}`\n"
         f"Mode       : `{mode.upper()}`\n"
         f"Customer   : `{customer}`\n\n"
-        "What next?"
+        "Choose an option below:"
     )
 
-    keyboard = [[InlineKeyboardButton("📤 Send Main File", callback_data="send_main")]]
-    if extra_cards:
-        keyboard.append([InlineKeyboardButton("📤 Send Extra File", callback_data="send_extra")])
-    keyboard.extend([
+    keyboard = [
+        [InlineKeyboardButton("📤 Send Main File", callback_data="send_main")],
         [InlineKeyboardButton("🔄 Check More Cards", callback_data="start_format")],
         [InlineKeyboardButton("🏠 Back to Main Menu", callback_data="back_to_main")]
-    ])
+    ]
+    if extra_cards:
+        keyboard.insert(1, [InlineKeyboardButton("📤 Send Extra File", callback_data="send_extra")])
 
     await safe_edit(
         status_msg,
@@ -541,37 +541,95 @@ async def show_post_summary(status_msg, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-    context.user_data["main_filename"] = filename
+    context.user_data["main_filename"] = main_filename
     context.user_data["extra_filename"] = f"{filename_base}_EXTRA.txt" if extra_cards else None
+
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    await query.answer()          # This is required
     data = query.data
-    msg = query.message
 
     if data == "send_main":
-        fn = context.user_data.get("main_filename")
-        if fn and os.path.exists(fn):
-            await msg.reply_document(open(fn, "rb"), filename=os.path.basename(fn))
-            os.remove(fn)
-            await query.edit_message_text("✅ Main file sent.")
+        filename = context.user_data.get("main_filename")
+        if filename and os.path.exists(filename):
+            with open(filename, "rb") as f:
+                await query.message.reply_document(
+                    f, 
+                    filename=os.path.basename(filename),
+                    caption="✅ Here is your main file"
+                )
+            os.remove(filename)
+            await query.edit_message_text("✅ Main file sent successfully.")
         else:
-            await query.edit_message_text("❌ File not found.")
+            await query.edit_message_text("❌ Main file not found or already sent.")
 
     elif data == "send_extra":
-        fn = context.user_data.get("extra_filename")
-        if fn and os.path.exists(fn):
-            await msg.reply_document(open(fn, "rb"), filename=os.path.basename(fn))
-            os.remove(fn)
-            await query.edit_message_text("✅ Extra file sent.")
+        filename = context.user_data.get("extra_filename")
+        if filename and os.path.exists(filename):
+            with open(filename, "rb") as f:
+                await query.message.reply_document(
+                    f, 
+                    filename=os.path.basename(filename),
+                    caption="✅ Here is your extra file"
+                )
+            os.remove(filename)
+            await query.edit_message_text("✅ Extra file sent successfully.")
         else:
             await query.edit_message_text("❌ Extra file not found.")
 
-    elif data in ("back_to_main", "start_format"):
+    elif data == "start_format":
+        context.user_data.clear()
+        await query.edit_message_text("Please send new cards or a .txt file.")
+        return ADD_CARDS  # or whatever your entry state is
+
+    elif data == "back_to_main":
         context.user_data.clear()
         await start(update, context)
+
+    return MENU
+
+
+async def post_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data == "send_main":
+        filename = context.user_data.get("main_filename")
+        if filename and os.path.exists(filename):
+            with open(filename, "rb") as f:
+                await query.message.reply_document(f, filename=os.path.basename(filename))
+            try:
+                os.remove(filename)
+            except:
+                pass
+            await query.edit_message_text("✅ Main file sent successfully.")
+        else:
+            await query.edit_message_text("❌ File not found.")
+    elif data == "send_extra":
+        filename = context.user_data.get("extra_filename")
+        if filename and os.path.exists(filename):
+            with open(filename, "rb") as f:
+                await query.message.reply_document(f, filename=os.path.basename(filename))
+            try:
+                os.remove(filename)
+            except:
+                pass
+            await query.edit_message_text("✅ Extra file sent successfully.")
+        else:
+            await query.edit_message_text("❌ Extra file not found.")
+    elif data == "start_format":
+        context.user_data.clear()
+        await query.message.reply_text("Send new cards or upload a .txt file:")
+        return ADD_CARDS
+    elif data == "back_to_main":
+        context.user_data.clear()
+        await start(update, context)
+        return MENU
+    return MENU
+# Then your other functions like show_post_summary, check_cards_with_storm, etc.
+
 
 
 async def check_balance(query, context: ContextTypes.DEFAULT_TYPE):
@@ -631,8 +689,26 @@ def build_handler():
     )
 
 if __name__ == "__main__":
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(build_handler())
-    application.add_handler(CallbackQueryHandler(button_handler, pattern="^(send_main|send_extra|back_to_main)$"))
-    print("🤖 Bot is now running successfully!")
-    application.run_polling(drop_pending_updates=True)
+    application = Application.builder().token("YOUR_TOKEN_HERE").build()
+    
+    # ====================== ALL HANDLERS GO HERE ======================
+    
+    application.add_handler(CommandHandler("start", start))
+    
+    # Your existing ConversationHandler (keep it exactly as you have it)
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            # ... your current states ...
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    application.add_handler(conv_handler)
+    
+    # ←←←←← ADD THIS LINE HERE ←←←←←
+    application.add_handler(CallbackQueryHandler(post_summary_handler, pattern="^(send_main|send_extra|start_format|back_to_main)$"))
+    
+    # ================================================================
+    
+    print("Bot is running...")
+    application.run_polling()
