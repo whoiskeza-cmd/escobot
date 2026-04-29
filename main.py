@@ -86,10 +86,7 @@ for bin6, info in DEFAULT_BINS.items():
 # ===================== HELPERS =====================
 def get_stats(uid: int) -> dict:
     if uid not in user_stats:
-        user_stats[uid] = {
-            "cards_sold": 0, "total_sales": 0, "revenue": 0.0, "profit": 0.0,
-            "testers_given": 0, "replacements_given": 0, "total_cards_checked": 0
-        }
+        user_stats[uid] = {"cards_sold":0,"total_sales":0,"revenue":0.0,"profit":0.0,"testers_given":0,"replacements_given":0,"total_cards_checked":0}
     return user_stats[uid]
 
 def random_ip() -> str:
@@ -229,7 +226,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_sessions.pop(update.effective_user.id, None)
     await update.message.reply_text("✅ Returned to FactoryVHQ Admin Panel.", reply_markup=main_menu())
 
-# ===================== BUTTON HANDLER =====================
+# ===================== MAIN BUTTON HANDLER =====================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -248,6 +245,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Session cancelled.", reply_markup=main_menu())
         return
 
+    if action == "check":
+        await check_handler(update, context)
+        return
+
+    if action == "send_file":
+        await send_file_handler(update, context)
+        return
+
+    if action == "remove_cards":
+        await remove_cards_handler(update, context)
+        return
+
+    if action == "set_filename":
+        await set_filename_handler(update, context)
+        return
+
+    if action == "add_more":
+        session["step"] = "waiting_cards"
+        await query.edit_message_text("Please send more cards or drop another .txt file.")
+        return
+
     if action == "rate":
         await query.edit_message_text(panel("BIN MANAGER"), reply_markup=rate_menu())
         return
@@ -258,7 +276,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Send 6-digit BIN:")
         return
 
-    # Start new session
+    # Start new mode
     session["mode"] = action
     session["cards"] = []
     session["filename"] = None
@@ -349,7 +367,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_remove(update, context)
         return
 
-    # === CARD INPUT - THIS IS THE PART THAT WAS BROKEN ===
+    # Card Input
     if session.get("step") in ["waiting_cards", "add_more"]:
         new_cards = []
         if update.message.document:
@@ -366,12 +384,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if new_cards:
             session["cards"].extend(new_cards)
             session["step"] = "idle"
-            # THIS LINE WAS MISSING - NOW IT ALWAYS SHOWS PRE-SUMMARY
             await show_pre_summary(update, session, uid)
         else:
             await update.message.reply_text("⚠️ No valid cards detected.")
 
-# ===================== PRE & POST SUMMARY =====================
+# ===================== PRE SUMMARY =====================
 async def show_pre_summary(update: Update, session: dict, uid: int):
     total = len(session["cards"])
     usa = sum(1 for c in session["cards"] if c.get("country","US").upper() == "US")
@@ -387,6 +404,7 @@ Filename      : {session.get('filename', 'Batch-####')}
 
     await update.message.reply_html(text, reply_markup=PRE_BUTTONS)
 
+# ===================== CHECK HANDLER =====================
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid = query.from_user.id
@@ -552,13 +570,9 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(CallbackQueryHandler(check_handler, pattern="^check$"))
-    app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
-    app.add_handler(CallbackQueryHandler(remove_cards_handler, pattern="^remove_cards$"))
-    app.add_handler(CallbackQueryHandler(set_filename_handler, pattern="^set_filename$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v12.1 - Pre-Summary Fixed")
+    print("🚀 FactoryVHQ v12.2 - Pre-Summary Buttons Fully Fixed")
     print(f"   Admins: {len(ADMIN_IDS)} | Test Mode: {TEST_MODE}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
