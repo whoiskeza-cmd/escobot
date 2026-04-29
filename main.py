@@ -151,7 +151,8 @@ async def toggle_test_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        if update.callback_query: await update.callback_query.answer("Access Denied.", show_alert=True)
+        if update.callback_query:
+            await update.callback_query.answer("Access Denied.", show_alert=True)
         return
 
     query = update.callback_query
@@ -186,9 +187,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(2)
         await query.edit_message_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
     elif action == "stats":
-        text = (f"📊 E$CO Stats\n\nCards Sold: {stats['cards_sold']}\nTotal Sales: {stats['total_sales']}\n"
-                f"Revenue: ${stats['revenue']:.2f}\nTesters Given: {stats['testers_given']}\n"
-                f"Replacements Given: {stats['replacements_given']}\nTotal Profit: ${stats['profit']:.2f}")
+        text = (f"📊 E$CO Stats\n\n"
+                f"Cards Sold: {stats['cards_sold']}\n"
+                f"Total Sales: {stats['total_sales']}\n"
+                f"Revenue: ${stats['revenue']:.2f}\n"
+                f"Testers Given: {stats['testers_given']}\n"
+                f"Replacements Given: {stats['replacements_given']}\n"
+                f"Total Profit: ${stats['profit']:.2f}")
         await query.edit_message_text(text, reply_markup=main_menu())
     elif action == "rate":
         await query.edit_message_text("🛠️ Rate BIN Menu", reply_markup=InlineKeyboardMarkup([
@@ -280,9 +285,7 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
     await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        return
-        
+    if update.effective_user.id != OWNER_ID: return
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
@@ -292,14 +295,13 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = len(session["cards"])
-    is_test_mode = TEST_MODE
     is_tester = session.get("mode") == "tester"
 
-    if is_test_mode:
-        post_text = f"""🟢 Post Summary/Confirmation (Test Mode)
+    if TEST_MODE:
+        post_text = f"""🟢 Post Summary/Confirmation (Test Mode Active)
 
 Total Cards: {count}
-Total Live: {count} ✅ (All marked as TestMode Demo)
+Total Live: {count} (All marked as TestMode Demo)
 Total Dead: 0
 LiveRate: 100.0%
 Target Reached: Yes
@@ -317,9 +319,35 @@ Test Mode: ON - Demo Mode
         await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Normal (non-test) flow remains below...
-    # (keep the rest of your original check_handler here)
+    # Normal mode (non-test)
+    batch_id = await submit_batch([f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}" for c in session["cards"]])
+    polls = 3 if count <= 5 else 5 if count <= 10 else 8 if count <= 15 else (count // 2) + 3
+    await query.edit_message_text(f"Batch Has Successfully Been Submitted (ID: {batch_id})\n\nPlease wait while we begin quality checking...")
 
+    live_count = await poll_batch(batch_id, polls)
+    dead_count = count - live_count
+    live_rate = round((live_count / count * 100), 1) if count > 0 else 0.0
+    extras = max(0, live_count - session.get("target", 0))
+    target_reached = live_count >= session.get("target", 0)
+
+    post_text = f"""Post Summary/Confirmation (Before Cards Are Sent Out)
+Total Cards: {count}
+Total Live: {live_count}
+Total Dead: {dead_count}
+LiveRate: {live_rate}%
+Target Reached: {target_reached}
+Extras: {extras}
+Customer: {session.get('customer', 'N/A')}
+Test Mode: OFF
+"""
+    keyboard = [
+        [InlineKeyboardButton("Send File", callback_data="send_file")],
+        [InlineKeyboardButton("Add More Cards", callback_data="add_more")],
+        [InlineKeyboardButton("Remove Cards", callback_data="remove")],
+        [InlineKeyboardButton("Set Filename", callback_data="set_filename")],
+        [InlineKeyboardButton("Cancel", callback_data="cancel")]
+    ]
+    await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -338,12 +366,38 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     filename_base = session.get("filename") or f"Batch-{random.randint(1000,9999)}"
-    final_filename = f"{filename_base}-TestMode-{len(session.get('cards', []))}.txt" if use_test_title else \
+    final_filename = f"{filename_base}-TestMode-Demo-{len(session.get('cards', []))}.txt" if use_test_title else \
                      f"{filename_base}-{len(session.get('cards', []))}.txt"
 
-    await query.message.reply_document(document=bytes(content, "utf-8"), filename=final_filename)
+    await query.message.reply_document(
+        document=bytes(content, "utf-8"), 
+        filename=final_filename
+    )
     await query.edit_message_text("✅ File sent successfully.")
     user_sessions.pop(uid, None)
+
+async def submit_batch(cards: List[str]) -> str:
+    if TEST_MODE:
+        return "test-batch-12345"
+    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{BASE_URL}/check", headers=headers, json={"cards": cards}) as resp:
+            data = await resp.json()
+            return data.get("data", {}).get("batch_id", "unknown")
+
+async def poll_batch(batch_id: str, max_polls: int) -> int:
+    if TEST_MODE:
+        await asyncio.sleep(3)
+        return max_polls * 2
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    for _ in range(max_polls):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{BASE_URL}/check/{batch_id}", headers=headers) as resp:
+                data = await resp.json()
+                if not data.get("data", {}).get("is_checking", True):
+                    return data.get("data", {}).get("accepted_count", 0)
+        await asyncio.sleep(4)
+    return 0
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -355,7 +409,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started - TestMode Demo Ready")
+    print("🚀 E$CO Bot Started Successfully - TestMode Fixed")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
