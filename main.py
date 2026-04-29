@@ -107,6 +107,7 @@ def main_menu():
         [InlineKeyboardButton(status, callback_data="toggle_test")]
     ])
 
+# ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Access Denied.")
@@ -145,6 +146,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
         return
 
+    # IMPORTANT: Route "check" directly to check_handler
+    if action == "check":
+        await check_handler(update, context)
+        return
+
+    # For other buttons
     session["mode"] = action
     if action in ["format", "tester", "sale", "replace"]:
         await query.edit_message_text("Send Cards or drop a .txt file to continue.")
@@ -190,6 +197,7 @@ Filename: {session.get('filename', 'Not Set')}
     await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Takes you to Post Summary"""
     query = update.callback_query
     uid = query.from_user.id
     session = user_sessions.get(uid)
@@ -255,7 +263,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started Successfully - Only run ONE instance")
+    print("🚀 E$CO Bot Started - Check button should now lead to Post Summary")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
