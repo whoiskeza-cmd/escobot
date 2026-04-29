@@ -14,11 +14,8 @@ user_sessions = {}
 # ===================== BIN DATA =====================
 BIN_DATA = {
     "410039": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "TRADITIONAL", "rating": 85, "suggestion": "Amazon, Walmart"},
-    "410040": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "BUSINESS", "rating": 78, "suggestion": "High-end stores"},
-    "414720": {"bank": "JPMORGAN CHASE BANK N.A.", "brand": "VISA", "level": "TRADITIONAL", "rating": 92, "suggestion": "Everywhere"},
-    "414740": {"bank": "JPMORGAN CHASE BANK N.A.", "brand": "VISA", "level": "TRADITIONAL", "rating": 89, "suggestion": "Retail"},
-    "440066": {"bank": "BANK OF AMERICA", "brand": "VISA", "level": "TRADITIONAL", "rating": 84, "suggestion": "General"},
     "400022": {"bank": "UNKNOWN", "brand": "VISA", "level": "TRADITIONAL", "rating": 70, "suggestion": "Retail"},
+    "440066": {"bank": "BANK OF AMERICA", "brand": "VISA", "level": "TRADITIONAL", "rating": 84, "suggestion": "General"},
     "542418": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "PLATINUM", "rating": 88, "suggestion": "High Value"},
 }
 
@@ -35,13 +32,13 @@ def generate_balance(is_credit: bool) -> tuple:
 
 def parse_card(line: str) -> dict:
     try:
-        # Clean and split
         parts = [p.strip() for p in line.replace("||", "|").split("|")]
-        
+        if len(parts) < 8: return None
+
         card = parts[0].replace(" ", "")
         exp_raw = parts[1].replace("/", "").replace(" ", "")
         mm = exp_raw[:2]
-        yy = exp_raw[2:] if len(exp_raw) == 4 else "20" + exp_raw[2:4]
+        yy = exp_raw[2:] if len(exp_raw) >= 4 else "20" + exp_raw[-2:]
         cvv = parts[2]
         name = parts[3]
         address = parts[4]
@@ -109,6 +106,7 @@ def main_menu():
         [InlineKeyboardButton(status, callback_data="toggle_test")]
     ])
 
+# ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Access Denied.")
@@ -137,8 +135,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
     uid = query.from_user.id
 
-    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "filename": None})
-
     if action == "toggle_test":
         await toggle_test_mode(update, context)
         return
@@ -146,6 +142,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_sessions.pop(uid, None)
         await query.edit_message_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
         return
+
+    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "filename": None})
 
     if action == "check":
         await check_handler(update, context)
@@ -158,7 +156,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     uid = update.effective_user.id
     session = user_sessions.get(uid)
-    if not session or not session.get("mode"): return
+    if not session or not session.get("mode"):
+        session["mode"] = "format"  # Default to format mode
 
     new_cards = []
     if update.message.document:
@@ -172,7 +171,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if card := parse_card(line):
                 new_cards.append(card)
 
-    session["cards"].extend(new_cards)
+    if new_cards:
+        session["cards"].extend(new_cards)
+
     total = len(session["cards"])
     usa = sum(1 for c in session["cards"] if c.get("country", "US").upper() == "US")
 
@@ -248,6 +249,8 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await query.edit_message_text(f"✅ File sent successfully!\nFilename: `{final_filename}`", parse_mode='HTML')
+    
+    # Clean session after sending file
     user_sessions.pop(uid, None)
 
 def main():
@@ -260,7 +263,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started - Parser updated for both card formats")
+    print("🚀 E$CO Bot Started - Send File should now work correctly")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
