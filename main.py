@@ -4,12 +4,14 @@ from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
+# ===================== CONFIG =====================
 TOKEN = os.getenv("TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
 
 TEST_MODE = False
 user_sessions = {}
 
+# ===================== BIN DATA =====================
 BIN_DATA = {
     "410039": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "TRADITIONAL", "rating": 85, "suggestion": "Amazon, Walmart"},
     "410040": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "BUSINESS", "rating": 78, "suggestion": "High-end stores"},
@@ -19,10 +21,11 @@ BIN_DATA = {
     "542418": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "PLATINUM", "rating": 88, "suggestion": "High Value"},
 }
 
-def get_random_ip():
+# ===================== HELPERS =====================
+def get_random_ip() -> str:
     return f"{random.randint(25,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(10,250)}"
 
-def generate_balance(is_credit: bool):
+def generate_balance(is_credit: bool) -> tuple:
     if random.random() < 0.03:
         bal = round(random.uniform(3200, 9200), 2)
     else:
@@ -30,7 +33,7 @@ def generate_balance(is_credit: bool):
     label = "Available Credit" if is_credit else "Balance"
     return bal, label
 
-def parse_card(line: str):
+def parse_card(line: str) -> dict:
     try:
         parts = [p.strip() for p in line.split("|")]
         if len(parts) < 8: return None
@@ -105,6 +108,7 @@ def main_menu():
         [InlineKeyboardButton(status, callback_data="toggle_test")]
     ])
 
+# ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Access Denied.")
@@ -118,21 +122,22 @@ async def toggle_test_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global TEST_MODE
     TEST_MODE = not TEST_MODE
     status = "ENABLED - All cards marked LIVE instantly (No API)" if TEST_MODE else "DISABLED"
+    text = f"🔧 Test Mode is now **{status}**"
     query = update.callback_query
     if query:
         await query.answer()
-        await query.edit_message_text(f"🔧 Test Mode is now **{status}**", parse_mode='HTML', reply_markup=main_menu())
+        await query.edit_message_text(text, parse_mode='HTML', reply_markup=main_menu())
     else:
-        await update.message.reply_text(f"🔧 Test Mode is now **{status}**", parse_mode='HTML')
+        await update.message.reply_text(text, parse_mode='HTML', reply_markup=main_menu())
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     query = update.callback_query
+    await query.answer()
     action = query.data
     uid = query.from_user.id
-    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "filename": None})
 
-    await query.answer()
+    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "filename": None})
 
     if action == "toggle_test":
         await toggle_test_mode(update, context)
@@ -140,10 +145,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "cancel":
         user_sessions.pop(uid, None)
         await query.edit_message_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
-        return
-
-    if action == "check":
-        await check_handler(update, context)
         return
 
     session["mode"] = action
@@ -168,7 +169,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if card := parse_card(line):
                 new_cards.append(card)
 
-    session.setdefault("cards", []).extend(new_cards)
+    session["cards"].extend(new_cards)
     total = len(session["cards"])
     usa = sum(1 for c in session["cards"] if c.get("country", "US").upper() == "US")
 
@@ -185,13 +186,12 @@ Total USA: {usa}
 Total Foreign: {total - usa}
 Mode: {session.get('mode','Format').capitalize()}
 Test Mode: {'ON' if TEST_MODE else 'OFF'}
-Filename: {session.get('filename', 'None')}
+Filename: {session.get('filename', 'Not Set')}
 """
 
     await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Directly shows Post Summary when Check is pressed"""
     query = update.callback_query
     uid = query.from_user.id
     session = user_sessions.get(uid)
@@ -223,26 +223,36 @@ LiveRate: {live_rate}%
     await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """This is the fixed Send File function"""
     query = update.callback_query
+    await query.answer("Generating file...")
+
     uid = query.from_user.id
     session = user_sessions.get(uid)
     if not session or not session.get("cards"):
         await query.edit_message_text("❌ No cards found.")
         return
 
+    # Generate formatted content
     content = "\n\n".join(format_card(card, test_mode=TEST_MODE) for card in session["cards"])
     count = len(session["cards"])
 
-    filename = session.get("filename") or (f"TestMode-Demo-{count}-cards")
-    final_filename = f"{filename}.txt"
+    # Filename logic
+    if session.get("filename"):
+        filename = f"{session['filename']}.txt"
+    else:
+        filename = f"TestMode-Demo-{count}-cards.txt"
 
+    # Send the file
     await query.message.reply_document(
         document=bytes(content, "utf-8"),
-        filename=final_filename,
+        filename=filename,
         caption=f"✅ TestMode File Generated\nTotal Cards: {count}"
     )
 
-    await query.edit_message_text(f"✅ File sent successfully!\nFilename: `{final_filename}`", parse_mode='HTML')
+    await query.edit_message_text(f"✅ File sent successfully!\nFilename: `{filename}`", parse_mode='HTML')
+    
+    # Clean up session
     user_sessions.pop(uid, None)
 
 def main():
@@ -255,7 +265,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started - Check button should now work correctly")
+    print("🚀 E$CO Bot Started - Send File button should now work correctly")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
