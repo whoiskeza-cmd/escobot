@@ -8,28 +8,29 @@ import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-# ================= LOAD ENVIRONMENT VARIABLES SAFELY =================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-STORM_API_KEY = os.getenv("STORM_API_KEY")
-USER_ID_STR = os.getenv("USER_ID")
+# ================= LOAD RAILWAY VARIABLES (Exact names from your image) =================
+TOKEN = os.getenv("TOKEN")
+API_KEY = os.getenv("API_KEY")
+OWNER_ID_STR = os.getenv("OWNER_ID")
+BASE_URL = os.getenv("BASE_URL")
 
 # Safety checks
-if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN is not set in Railway variables!")
-if not STORM_API_KEY:
-    raise ValueError("❌ STORM_API_KEY is not set in Railway variables!")
-if not USER_ID_STR:
-    raise ValueError("❌ USER_ID is not set in Railway variables! Please add your Telegram numeric ID.")
+if not TOKEN:
+    raise ValueError("❌ TOKEN is not set!")
+if not API_KEY:
+    raise ValueError("❌ API_KEY is not set!")
+if not OWNER_ID_STR:
+    raise ValueError("❌ OWNER_ID is not set! Please add your Telegram numeric ID.")
+if not BASE_URL:
+    raise ValueError("❌ BASE_URL is not set!")
 
 try:
-    OWNER_ID = int(USER_ID_STR)
+    OWNER_ID = int(OWNER_ID_STR)
 except ValueError:
-    raise ValueError("❌ USER_ID must be a numeric value (your Telegram ID)")
-
-API_BASE = "https://api.storm.gift/api/v1"
+    raise ValueError("❌ OWNER_ID must be a numeric Telegram ID")
 
 print(f"✅ Bot starting for OWNER_ID: {OWNER_ID}")
-print(f"🔧 Test Mode: {'ENABLED' if 'TEST_MODE' in os.environ else 'DISABLED (use /testmode)'}")
+print(f"🌐 Using BASE_URL: {BASE_URL}")
 
 # ===================== GLOBAL SETTINGS =====================
 TEST_MODE = False
@@ -131,9 +132,9 @@ def format_live_card(card: dict, is_tester: bool = False) -> str:
 async def submit_batch(cards: List[str]) -> str:
     if TEST_MODE:
         return "test-batch-12345"
-    headers = {"Authorization": f"Bearer {STORM_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as session:
-        async with session.post(f"{API_BASE}/check", headers=headers, json={"cards": cards}) as resp:
+        async with session.post(f"{BASE_URL}/check", headers=headers, json={"cards": cards}) as resp:
             data = await resp.json()
             return data.get("data", {}).get("batch_id", "unknown")
 
@@ -141,10 +142,10 @@ async def poll_batch(batch_id: str, max_polls: int) -> int:
     if TEST_MODE:
         await asyncio.sleep(3)
         return max_polls * 2
-    headers = {"Authorization": f"Bearer {STORM_API_KEY}"}
+    headers = {"Authorization": f"Bearer {API_KEY}"}
     for _ in range(max_polls):
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{API_BASE}/check/{batch_id}", headers=headers) as resp:
+            async with session.get(f"{BASE_URL}/check/{batch_id}", headers=headers) as resp:
                 data = await resp.json()
                 if not data.get("data", {}).get("is_checking", True):
                     return data.get("data", {}).get("accepted_count", 0)
@@ -183,7 +184,7 @@ async def toggle_test_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🔧 Test Mode is now **{status}**", parse_mode='HTML')
     await start(update, context)
 
-# ===================== BUTTON & MESSAGE HANDLERS =====================
+# ===================== BUTTON HANDLER =====================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.callback_query.answer("Access Denied.", show_alert=True)
@@ -249,6 +250,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "set_filename":
         await query.edit_message_text("Send the filename you want to use (without .txt):")
 
+# ===================== MESSAGE HANDLER =====================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     text = update.message.text.strip()
@@ -456,7 +458,7 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===================== LAUNCH =====================
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("testmode", toggle_test_mode))
