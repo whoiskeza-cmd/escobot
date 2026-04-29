@@ -8,7 +8,7 @@ import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-# ================= RAILWAY VARIABLES =================
+# ================= RAILWAY VARIABLES (matching your screenshot) =================
 TOKEN = os.getenv("TOKEN")
 API_KEY = os.getenv("API_KEY")
 OWNER_ID = int(os.getenv("OWNER_ID"))
@@ -39,7 +39,6 @@ BIN_DATA: Dict[str, dict] = {
 
 user_sessions: Dict[int, dict] = {}
 
-# ===================== HELPERS =====================
 def get_random_ip() -> str:
     return f"{random.randint(25,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(10,250)}"
 
@@ -150,7 +149,6 @@ def main_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(status, callback_data="toggle_test")]
     ])
 
-# ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Access Denied.")
@@ -439,7 +437,7 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("✅ File sent successfully.")
     user_sessions.pop(uid, None)
 
-# ===================== MAIN =====================
+# ===================== LAUNCH =====================
 def main():
     app = Application.builder().token(TOKEN).build()
 
