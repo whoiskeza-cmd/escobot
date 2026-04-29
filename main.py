@@ -271,27 +271,22 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = len(session["cards"])
     is_tester = session.get("mode") == "tester"
 
-    # === TEST MODE: Auto go to Post Summary with all cards as Live ===
+    # ===================== TEST MODE: SKIP TO FILE =====================
     if TEST_MODE:
-        post_text = f"""🟢 Post Summary/Confirmation (Test Mode Active)
+        content = "\n\n".join(
+            format_live_card(c, is_tester=is_tester, test_mode=True) 
+            for c in session.get("cards", [])
+        )
 
-Total Cards: {count}
-Total Live: {count} ✅ (All passed as TestMode Demo)
-Total Dead: 0
-LiveRate: 100.0%
-Target Reached: Yes
-Extras: 0
-Customer: {session.get('customer', 'N/A')}
-Test Mode: ON - All cards automatically marked LIVE
-"""
-        keyboard = [
-            [InlineKeyboardButton("Send TestMode File", callback_data="send_file")],
-            [InlineKeyboardButton("Add More Cards", callback_data="add_more")],
-            [InlineKeyboardButton("Remove Cards", callback_data="remove")],
-            [InlineKeyboardButton("Set Filename", callback_data="set_filename")],
-            [InlineKeyboardButton("Cancel", callback_data="cancel")]
-        ]
-        await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        filename_base = session.get("filename") or f"Batch-{random.randint(1000,9999)}"
+        final_filename = f"{filename_base}-TestMode-Demo-{count}.txt"
+
+        await query.message.reply_document(
+            document=bytes(content, "utf-8"), 
+            filename=final_filename
+        )
+        await query.edit_message_text(f"✅ TestMode Complete!\nSent {count} cards as TestMode Demo.")
+        user_sessions.pop(uid, None)
         return
 
     # Normal (non-test) flow
@@ -332,16 +327,13 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not session or not session.get("cards"): return
 
     is_tester = session.get("mode") == "tester"
-    use_test_title = TEST_MODE
-
     content = "\n\n".join(
-        format_live_card(c, is_tester=is_tester, test_mode=use_test_title) 
+        format_live_card(c, is_tester=is_tester, test_mode=TEST_MODE) 
         for c in session.get("cards", [])
     )
 
     filename_base = session.get("filename") or f"Batch-{random.randint(1000,9999)}"
-    final_filename = f"{filename_base}-TestMode-Demo-{len(session.get('cards', []))}.txt" if use_test_title else \
-                     f"{filename_base}-{len(session.get('cards', []))}.txt"
+    final_filename = f"{filename_base}-{len(session.get('cards', []))}.txt"
 
     await query.message.reply_document(document=bytes(content, "utf-8"), filename=final_filename)
     await query.edit_message_text("✅ File sent successfully.")
@@ -379,7 +371,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started - Test Mode Fully Fixed")
+    print("🚀 E$CO Bot Started - Test Mode: Skip to File Enabled")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
