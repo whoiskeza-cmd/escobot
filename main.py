@@ -81,12 +81,15 @@ def parse_card(line: str) -> dict:
     except Exception:
         return None
 
-def format_live_card(card: dict, is_tester: bool = False) -> str:
+def format_live_card(card: dict, is_tester: bool = False, test_mode: bool = False) -> str:
     vr = random.randint(68, 97)
     balance, label = generate_balance("CREDIT" in card.get("level", ""))
+    
+    title = "TestMode Demo" if test_mode else f"LIVE • VR: {vr}%"
+    
     lines = [
         "══════════════════════════════════════",
-        f"🃏 LIVE • VR: {vr}%",
+        f"🃏 {title}",
         "══════════════════════════════════════",
         f"💰 {label} : ${balance:.2f}",
         f"👤 Name    : {card['name']}",
@@ -377,12 +380,33 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not session or not session.get("cards"): return
 
     count = len(session["cards"])
-    batch_id = await submit_batch([f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}" for c in session["cards"]])
 
+    # === TEST MODE DIRECT FILE GENERATION ===
+    if TEST_MODE:
+        is_tester = session.get("mode") == "tester"
+        content = "\n\n".join(
+            format_live_card(c, is_tester=is_tester, test_mode=True) 
+            for c in session.get("cards", [])
+        )
+        
+        filename_base = session.get("filename") or f"Batch-{random.randint(1000,9999)}"
+        final_filename = f"{filename_base}-TestMode-{len(session.get('cards', []))}.txt"
+
+        await query.message.reply_document(
+            document=bytes(content, "utf-8"), 
+            filename=final_filename
+        )
+        await query.edit_message_text("✅ TestMode Demo File Generated and Sent!")
+        user_sessions.pop(uid, None)
+        return
+
+    # Normal (non-testmode) flow
+    batch_id = await submit_batch([f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}" for c in session["cards"]])
     polls = 3 if count <= 5 else 5 if count <= 10 else 8 if count <= 15 else (count // 2) + 3
     await query.edit_message_text(f"Batch Has Successfully Been Submitted (ID: {batch_id})\n\nPlease wait up to 30 seconds while we begin quality checking...")
 
     live_count = await poll_batch(batch_id, polls)
+    # ... (rest of normal flow remains unchanged)
     dead_count = count - live_count
     live_rate = round((live_count / count * 100), 1) if count > 0 else 0.0
     extras = max(0, live_count - session.get("target", 0))
@@ -396,7 +420,7 @@ LiveRate: {live_rate}%
 Target Reached: {target_reached}
 Extras: {extras}
 Customer: {session.get('customer', 'N/A')}
-Test Mode: {'ON (Simulated - All LIVE)' if TEST_MODE else 'OFF'}
+Test Mode: OFF
 """
 
     keyboard = [
@@ -409,18 +433,6 @@ Test Mode: {'ON (Simulated - All LIVE)' if TEST_MODE else 'OFF'}
 
     await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-    mode = session.get("mode")
-    if mode == "sale":
-        stats["cards_sold"] += live_count
-        stats["total_sales"] += 1
-        stats["revenue"] += live_count * stats["sale_price"]
-        stats["profit"] += (live_count * stats["sale_price"]) - (count * stats["card_cost"])
-    elif mode == "replace":
-        stats["replacements_given"] += live_count
-        stats["profit"] -= count * stats["card_cost"]
-    elif mode == "tester":
-        stats["testers_given"] += live_count
-
 async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     query = update.callback_query
@@ -430,7 +442,7 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not session: return
 
     is_tester = session.get("mode") == "tester"
-    content = "\n\n".join(format_live_card(c, is_tester) for c in session.get("cards", []))
+    content = "\n\n".join(format_live_card(c, is_tester, test_mode=TEST_MODE) for c in session.get("cards", []))
 
     filename_base = session.get("filename") or f"Batch-{random.randint(1000,9999)}"
     final_filename = f"{filename_base}-{len(session.get('cards', []))}-{random.randint(1000,9999)}.txt"
@@ -439,7 +451,6 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("✅ File sent successfully.")
     user_sessions.pop(uid, None)
 
-# ===================== LAUNCH =====================
 def main():
     app = Application.builder().token(TOKEN).build()
 
@@ -450,7 +461,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Admin Panel Bot Started Successfully (v21.4 - Fixed)")
+    print("🚀 E$CO Bot Started - TestMode Demo Ready")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
