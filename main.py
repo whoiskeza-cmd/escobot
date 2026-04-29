@@ -137,7 +137,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     action = query.data
     uid = query.from_user.id
-    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "filename": None, "customer": None, "target": 0, "tester_type": None})
+    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "filename": None})
 
     if action == "toggle_test":
         await toggle_test_mode(update, context)
@@ -148,14 +148,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     session["mode"] = action
-
-    if action in ["format", "tester", "sale", "replace"]:
+    if action in ["format", "tester"]:
         await query.edit_message_text("Send Cards or drop a .txt file to continue.")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     uid = update.effective_user.id
-    text = update.message.text.strip()
     session = user_sessions.get(uid)
     if not session or not session.get("mode"): return
 
@@ -167,14 +165,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if card := parse_card(line):
                 new_cards.append(card)
     else:
-        for line in text.splitlines():
+        for line in update.message.text.splitlines():
             if card := parse_card(line):
                 new_cards.append(card)
 
     session.setdefault("cards", []).extend(new_cards)
     total = len(session["cards"])
     usa = sum(1 for c in session["cards"] if c.get("country", "US").upper() == "US")
-    foreign = total - usa
 
     keyboard = [
         [InlineKeyboardButton("✅ Check", callback_data="check")],
@@ -186,18 +183,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pre_text = f"""Pre Summary/Confirmation
 Total Cards: {total}
 Total USA: {usa}
-Total Foreign: {foreign}
+Total Foreign: {total - usa}
 Mode: {session.get('mode','Format').capitalize()}
 Test Mode: {'ON' if TEST_MODE else 'OFF'}
-Filename: {session.get('filename', 'Not Set')}
+Filename: {session.get('filename', 'None')}
 """
 
     await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """This now correctly goes to Post Summary"""
     if update.effective_user.id != OWNER_ID: return
     query = update.callback_query
-    await query.answer("Processing cards...")
+    await query.answer("Processing...")
 
     uid = query.from_user.id
     session = user_sessions.get(uid)
@@ -206,11 +204,10 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = len(session["cards"])
-    live_count = count if TEST_MODE else count  # In test mode all are live
+    live_count = count if TEST_MODE else count
     dead_count = 0 if TEST_MODE else 0
     live_rate = 100.0 if TEST_MODE else 0.0
 
-    # ===================== POST SUMMARY =====================
     post_text = f"""Post Summary/Confirmation
 Total Cards: {count}
 Total Live: {live_count}
@@ -219,12 +216,10 @@ LiveRate: {live_rate}%
 """
 
     if TEST_MODE:
-        post_text += "\n✅ All cards marked LIVE in Test Mode"
-    else:
-        post_text += "\n(Real checker would run here)"
+        post_text += "\n\n✅ All cards have been marked as LIVE in Test Mode."
 
     keyboard = [
-        [InlineKeyboardButton("Send File", callback_data="send_file")],
+        [InlineKeyboardButton("📤 Send File", callback_data="send_file")],
         [InlineKeyboardButton("Add More Cards", callback_data="add_more")],
         [InlineKeyboardButton("Cancel", callback_data="cancel")]
     ]
@@ -245,18 +240,16 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     content = "\n\n".join(format_card(card, test_mode=TEST_MODE) for card in session["cards"])
     count = len(session["cards"])
 
-    if session.get("filename"):
-        filename = f"{session['filename']}.txt"
-    else:
-        filename = f"TestMode-Demo-{count}-cards.txt" if TEST_MODE else f"Batch-{random.randint(1000,9999)}.txt"
+    filename = session.get("filename") or (f"TestMode-Demo-{count}-cards")
+    final_filename = f"{filename}.txt"
 
     await query.message.reply_document(
         document=bytes(content, "utf-8"),
-        filename=filename,
-        caption="✅ File Generated Successfully"
+        filename=final_filename,
+        caption=f"✅ TestMode File Generated\nTotal Cards: {count}"
     )
 
-    await query.edit_message_text(f"✅ File sent!\nFilename: `{filename}`", parse_mode='HTML')
+    await query.edit_message_text(f"✅ File sent successfully!\nFilename: `{final_filename}`", parse_mode='HTML')
     user_sessions.pop(uid, None)
 
 def main():
@@ -269,7 +262,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started - Pre + Post Summary Fully Working in Test Mode")
+    print("🚀 E$CO Bot Started - Pre Summary → Post Summary → File Now Working in Test Mode")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
