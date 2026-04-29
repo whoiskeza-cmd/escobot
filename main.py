@@ -172,6 +172,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
         return
 
+    if action == "add_more":
+        session["mode"] = "format"
+        await query.edit_message_text("Send more cards or drop another .txt file:")
+        return
+
     session["mode"] = action
 
     if action == "format":
@@ -188,12 +193,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
     elif action == "stats":
         text = (f"📊 E$CO Stats\n\n"
-                f"Cards Sold: {stats['cards_sold']}\n"
-                f"Total Sales: {stats['total_sales']}\n"
-                f"Revenue: ${stats['revenue']:.2f}\n"
-                f"Testers Given: {stats['testers_given']}\n"
-                f"Replacements Given: {stats['replacements_given']}\n"
-                f"Total Profit: ${stats['profit']:.2f}")
+                f"Cards Sold: {stats['cards_sold']}\nTotal Sales: {stats['total_sales']}\n"
+                f"Revenue: ${stats['revenue']:.2f}\nTesters Given: {stats['testers_given']}\n"
+                f"Replacements Given: {stats['replacements_given']}\nTotal Profit: ${stats['profit']:.2f}")
         await query.edit_message_text(text, reply_markup=main_menu())
     elif action == "rate":
         await query.edit_message_text("🛠️ Rate BIN Menu", reply_markup=InlineKeyboardMarkup([
@@ -219,36 +221,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not session or not session.get("mode"): return
 
     mode = session["mode"]
-
-    if mode == "set_filename":
-        session["filename"] = text.strip()
-        await update.message.reply_text(f"✅ Filename set to: **{session['filename']}**", parse_mode='HTML')
-        session["mode"] = "format"
-
-    if mode == "sale" and not session.get("customer"):
-        session["customer"] = text
-        await update.message.reply_text("How many cards is this customer purchasing?")
-        return
-    if mode == "sale" and session.get("target", 0) == 0:
-        session["target"] = int(text)
-        await update.message.reply_text("Target Set. Send cards or drop .txt file.")
-        return
-
-    if mode == "replace" and not session.get("customer"):
-        session["customer"] = text
-        await update.message.reply_text("How many cards are being replaced?")
-        return
-    if mode == "replace" and session.get("target", 0) == 0:
-        session["target"] = int(text)
-        await update.message.reply_text("Target Submitted. Send cards or drop .txt file.")
-        return
-
-    if mode == "tester" and not session.get("tester_type"):
-        session["tester_type"] = text
-        await update.message.reply_text("Send cards or drop a .txt file to continue.")
-        return
-
     new_cards = []
+
     if update.message.document:
         file = await update.message.document.get_file()
         content = (await file.download_as_bytearray()).decode("utf-8")
@@ -297,17 +271,18 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = len(session["cards"])
     is_tester = session.get("mode") == "tester"
 
+    # === TEST MODE: Auto go to Post Summary with all cards as Live ===
     if TEST_MODE:
         post_text = f"""🟢 Post Summary/Confirmation (Test Mode Active)
 
 Total Cards: {count}
-Total Live: {count} (All marked as TestMode Demo)
+Total Live: {count} ✅ (All passed as TestMode Demo)
 Total Dead: 0
 LiveRate: 100.0%
 Target Reached: Yes
 Extras: 0
 Customer: {session.get('customer', 'N/A')}
-Test Mode: ON - Demo Mode
+Test Mode: ON - All cards automatically marked LIVE
 """
         keyboard = [
             [InlineKeyboardButton("Send TestMode File", callback_data="send_file")],
@@ -319,23 +294,22 @@ Test Mode: ON - Demo Mode
         await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Normal mode (non-test)
+    # Normal (non-test) flow
     batch_id = await submit_batch([f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}" for c in session["cards"]])
     polls = 3 if count <= 5 else 5 if count <= 10 else 8 if count <= 15 else (count // 2) + 3
-    await query.edit_message_text(f"Batch Has Successfully Been Submitted (ID: {batch_id})\n\nPlease wait while we begin quality checking...")
+    await query.edit_message_text(f"Batch Submitted (ID: {batch_id})\nChecking quality...")
 
     live_count = await poll_batch(batch_id, polls)
     dead_count = count - live_count
     live_rate = round((live_count / count * 100), 1) if count > 0 else 0.0
     extras = max(0, live_count - session.get("target", 0))
-    target_reached = live_count >= session.get("target", 0)
 
-    post_text = f"""Post Summary/Confirmation (Before Cards Are Sent Out)
+    post_text = f"""Post Summary/Confirmation
 Total Cards: {count}
 Total Live: {live_count}
 Total Dead: {dead_count}
 LiveRate: {live_rate}%
-Target Reached: {target_reached}
+Target Reached: {live_count >= session.get("target", 0)}
 Extras: {extras}
 Customer: {session.get('customer', 'N/A')}
 Test Mode: OFF
@@ -369,16 +343,12 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     final_filename = f"{filename_base}-TestMode-Demo-{len(session.get('cards', []))}.txt" if use_test_title else \
                      f"{filename_base}-{len(session.get('cards', []))}.txt"
 
-    await query.message.reply_document(
-        document=bytes(content, "utf-8"), 
-        filename=final_filename
-    )
+    await query.message.reply_document(document=bytes(content, "utf-8"), filename=final_filename)
     await query.edit_message_text("✅ File sent successfully.")
     user_sessions.pop(uid, None)
 
 async def submit_batch(cards: List[str]) -> str:
-    if TEST_MODE:
-        return "test-batch-12345"
+    if TEST_MODE: return "test-batch-12345"
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as session:
         async with session.post(f"{BASE_URL}/check", headers=headers, json={"cards": cards}) as resp:
@@ -409,7 +379,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started Successfully - TestMode Fixed")
+    print("🚀 E$CO Bot Started - Test Mode Fully Fixed")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
