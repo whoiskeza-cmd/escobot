@@ -18,6 +18,7 @@ BIN_DATA = {
     "414720": {"bank": "JPMORGAN CHASE BANK N.A.", "brand": "VISA", "level": "TRADITIONAL", "rating": 92, "suggestion": "Everywhere"},
     "414740": {"bank": "JPMORGAN CHASE BANK N.A.", "brand": "VISA", "level": "TRADITIONAL", "rating": 89, "suggestion": "Retail"},
     "440066": {"bank": "BANK OF AMERICA", "brand": "VISA", "level": "TRADITIONAL", "rating": 84, "suggestion": "General"},
+    "400022": {"bank": "UNKNOWN", "brand": "VISA", "level": "TRADITIONAL", "rating": 70, "suggestion": "Retail"},
     "542418": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "PLATINUM", "rating": 88, "suggestion": "High Value"},
 }
 
@@ -34,12 +35,13 @@ def generate_balance(is_credit: bool) -> tuple:
 
 def parse_card(line: str) -> dict:
     try:
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) < 8: return None
+        # Clean and split
+        parts = [p.strip() for p in line.replace("||", "|").split("|")]
+        
         card = parts[0].replace(" ", "")
-        exp = parts[1].replace("/", "").replace(" ", "")
-        mm = exp[:2]
-        yy = exp[2:] if len(exp) == 4 else "20" + exp[2:]
+        exp_raw = parts[1].replace("/", "").replace(" ", "")
+        mm = exp_raw[:2]
+        yy = exp_raw[2:] if len(exp_raw) == 4 else "20" + exp_raw[2:4]
         cvv = parts[2]
         name = parts[3]
         address = parts[4]
@@ -107,7 +109,6 @@ def main_menu():
         [InlineKeyboardButton(status, callback_data="toggle_test")]
     ])
 
-# ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Access Denied.")
@@ -146,15 +147,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
         return
 
-    # IMPORTANT: Route "check" directly to check_handler
     if action == "check":
         await check_handler(update, context)
         return
 
-    # For other buttons
     session["mode"] = action
-    if action in ["format", "tester", "sale", "replace"]:
-        await query.edit_message_text("Send Cards or drop a .txt file to continue.")
+    await query.edit_message_text("Send Cards or drop a .txt file to continue.")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -197,7 +195,6 @@ Filename: {session.get('filename', 'Not Set')}
     await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Takes you to Post Summary"""
     query = update.callback_query
     uid = query.from_user.id
     session = user_sessions.get(uid)
@@ -263,7 +260,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started - Check button should now lead to Post Summary")
+    print("🚀 E$CO Bot Started - Parser updated for both card formats")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
