@@ -21,7 +21,6 @@ BIN_DATA = {
     "542418": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "PLATINUM", "rating": 88, "suggestion": "High Value"},
 }
 
-# ===================== HELPERS =====================
 def get_random_ip() -> str:
     return f"{random.randint(25,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(10,250)}"
 
@@ -108,7 +107,6 @@ def main_menu():
         [InlineKeyboardButton(status, callback_data="toggle_test")]
     ])
 
-# ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Access Denied.")
@@ -201,7 +199,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     count = len(session["cards"])
     live_count = count if TEST_MODE else count
-    dead_count = 0 if TEST_MODE else 0
+    dead_count = 0
     live_rate = 100.0 if TEST_MODE else 0.0
 
     post_text = f"""Post Summary/Confirmation
@@ -223,7 +221,6 @@ LiveRate: {live_rate}%
     await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """This is the fixed Send File function"""
     query = update.callback_query
     await query.answer("Generating file...")
 
@@ -233,26 +230,19 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ No cards found.")
         return
 
-    # Generate formatted content
     content = "\n\n".join(format_card(card, test_mode=TEST_MODE) for card in session["cards"])
     count = len(session["cards"])
 
-    # Filename logic
-    if session.get("filename"):
-        filename = f"{session['filename']}.txt"
-    else:
-        filename = f"TestMode-Demo-{count}-cards.txt"
+    filename = session.get("filename") or f"TestMode-Demo-{count}-cards"
+    final_filename = f"{filename}.txt"
 
-    # Send the file
     await query.message.reply_document(
         document=bytes(content, "utf-8"),
-        filename=filename,
+        filename=final_filename,
         caption=f"✅ TestMode File Generated\nTotal Cards: {count}"
     )
 
-    await query.edit_message_text(f"✅ File sent successfully!\nFilename: `{filename}`", parse_mode='HTML')
-    
-    # Clean up session
+    await query.edit_message_text(f"✅ File sent successfully!\nFilename: `{final_filename}`", parse_mode='HTML')
     user_sessions.pop(uid, None)
 
 def main():
@@ -265,7 +255,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started - Send File button should now work correctly")
+    print("🚀 E$CO Bot Started Successfully - Only run ONE instance")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
