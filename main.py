@@ -2,45 +2,20 @@ import asyncio
 import random
 import os
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict
 
-import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 # ================= CONFIG =================
 TOKEN = os.getenv("TOKEN")
-API_KEY = os.getenv("API_KEY")
 OWNER_ID = int(os.getenv("OWNER_ID"))
-BASE_URL = os.getenv("BASE_URL", "https://api.storm.gift/api/v1")
-
-print(f"✅ Bot starting for OWNER_ID: {OWNER_ID}")
-print(f"🌐 Using BASE_URL: {BASE_URL}")
 
 TEST_MODE = False
 
-stats = {
-    "cards_sold": 0, "total_sales": 0, "revenue": 0.0,
-    "testers_given": 0, "replacements_given": 0, "profit": 0.0,
-    "card_cost": 2.50, "sale_price": 15.00
-}
-
-BIN_DATA: Dict[str, dict] = {}  # You can keep adding BINs later
-
 user_sessions: Dict[int, dict] = {}
 
-def get_random_ip() -> str:
-    return f"{random.randint(25,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(10,250)}"
-
-def generate_balance(is_credit: bool) -> tuple:
-    if random.random() < 0.03:
-        bal = round(random.uniform(3200, 9200), 2)
-    else:
-        bal = round(random.uniform(85, 1950), 2)
-    label = "Available Credit" if is_credit else "Balance"
-    return bal, label
-
-def parse_card(line: str) -> dict:
+def parse_card(line: str):
     try:
         parts = [p.strip() for p in line.split("|")]
         if len(parts) < 8: return None
@@ -55,127 +30,77 @@ def parse_card(line: str) -> dict:
         state = parts[6]
         zipcode = parts[7]
         country = parts[8] if len(parts) > 8 else "US"
-        phone = parts[9] if len(parts) > 9 else "N/A"
-        email = parts[10] if len(parts) > 10 else "N/A"
-
-        bin6 = card[:6]
-        info = BIN_DATA.get(bin6, {"bank":"UNKNOWN","brand":"VISA","level":"STANDARD","vr":75,"balance":80,"suggestion":"Retail"})
 
         return {
             "card": card, "mm": mm, "yy": yy[-2:], "cvv": cvv, "name": name,
             "address": address, "city": city, "state": state, "zip": zipcode,
-            "country": country, "phone": phone, "email": email,
-            "bank": info["bank"], "brand": info["brand"], "level": info["level"],
-            "bin_rating": info.get("vr", 75), "suggestion": info.get("suggestion", "Retail"),
-            "last4": card[-4:]
+            "country": country, "last4": card[-4:]
         }
-    except Exception:
+    except:
         return None
 
-def format_live_card(card: dict, test_mode: bool = False) -> str:
-    vr = random.randint(68, 97)
-    balance, label = generate_balance("CREDIT" in card.get("level", ""))
-    title = "TestMode Demo" if test_mode else f"LIVE • VR: {vr}%"
-    
+def format_card(card: dict, test_mode: bool = False) -> str:
+    title = "TestMode Demo" if test_mode else "LIVE"
     lines = [
         "══════════════════════════════════════",
         f"🃏 {title}",
         "══════════════════════════════════════",
-        f"💰 {label} : ${balance:.2f}",
         f"👤 Name    : {card['name']}",
         f"💳 Card    : {card['card']}",
         f"📅 Expiry  : {card['mm']}/{card['yy']}",
         f"🔒 CVV     : {card['cvv']}",
-        f"🏦 Bank    : {card['bank']}",
-        f"🌍 Country : {card['country']} • {card['brand']} {card['level']}",
+        f"📍 {card['address']}, {card['city']}, {card['state']} {card['zip']}",
+        f"🌍 {card['country']}",
         "",
-        "📍 Billing Address:",
-        f"   {card['address']}",
-        f"   {card['city']}, {card['state']} {card['zip']}",
-        f"   Phone  : {card['phone']}",
-        f"   Email  : {card['email']}",
-        "",
-        f"🌐 IP      : {get_random_ip()}",
-        f"🕒 Checked : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC",
-        "══════════════════════════════════════",
-        f"BIN Rate   : {card.get('bin_rating', 85)} | {card.get('suggestion', 'Retail')}",
+        f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC",
         "══════════════════════════════════════"
     ]
     return "\n".join(lines)
 
-def main_menu() -> InlineKeyboardMarkup:
-    status = "🟢 TEST MODE ON" if TEST_MODE else "🔴 TEST MODE OFF"
+def main_menu():
+    status = "🟢 TEST MODE ON (Skip to File)" if TEST_MODE else "🔴 TEST MODE OFF"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Format", callback_data="format")],
-        [InlineKeyboardButton("Sale", callback_data="sale")],
-        [InlineKeyboardButton("Replace", callback_data="replace")],
-        [InlineKeyboardButton("Tester", callback_data="tester")],
-        [InlineKeyboardButton("Rate BIN", callback_data="rate")],
-        [InlineKeyboardButton("Balance", callback_data="balance")],
-        [InlineKeyboardButton("Stats", callback_data="stats")],
-        [InlineKeyboardButton(status, callback_data="toggle_test")]
+        [InlineKeyboardButton(status, callback_data="toggle_test")],
+        [InlineKeyboardButton("Cancel", callback_data="cancel")]
     ])
 
-# ===================== MAIN HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Access Denied.")
         return
-    await update.message.reply_html(
-        f"<b>E$CO Admin Panel</b>\n\nWelcome @{update.effective_user.username}",
-        reply_markup=main_menu()
-    )
-
-async def toggle_test_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global TEST_MODE
-    TEST_MODE = not TEST_MODE
-    status = "ENABLED (Skip to File - TestMode Demo)" if TEST_MODE else "DISABLED (Real API)"
-    query = update.callback_query
-    if query:
-        await query.answer()
-        await query.edit_message_text(f"🔧 Test Mode is now **{status}**", parse_mode='HTML')
-        await query.edit_message_reply_markup(reply_markup=main_menu())
-    else:
-        await update.message.reply_text(f"🔧 Test Mode is now **{status}**", parse_mode='HTML')
+    await update.message.reply_text("Welcome to E$CO Admin Panel", reply_markup=main_menu())
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        if update.callback_query:
-            await update.callback_query.answer("Access Denied.", show_alert=True)
-        return
-
+    global TEST_MODE
     query = update.callback_query
     await query.answer()
     action = query.data
     uid = query.from_user.id
-    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "filename": None})
 
     if action == "toggle_test":
-        await toggle_test_mode(update, context)
-        return
-    if action == "cancel":
-        user_sessions.pop(uid, None)
-        await query.edit_message_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
-        return
-    if action == "add_more":
-        session["mode"] = "format"
-        await query.edit_message_text("Send more cards or drop another .txt file:")
+        TEST_MODE = not TEST_MODE
+        status = "ON - Skip directly to file with TestMode Demo" if TEST_MODE else "OFF"
+        await query.edit_message_text(f"Test Mode is now **{status}**", parse_mode='HTML', reply_markup=main_menu())
         return
 
-    session["mode"] = action
+    if action == "cancel":
+        user_sessions.pop(uid, None)
+        await query.edit_message_text("Returned to main menu.", reply_markup=main_menu())
+        return
+
     if action == "format":
-        await query.edit_message_text("Send Cards or drop a .txt file to continue.")
+        await query.edit_message_text("Send cards or drop a .txt file:")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     uid = update.effective_user.id
-    session = user_sessions.get(uid)
-    if not session: return
+    session = user_sessions.setdefault(uid, {"cards": []})
 
     new_cards = []
     if update.message.document:
         file = await update.message.document.get_file()
-        content = (await file.download_as_bytearray()).decode("utf-8")
+        content = (await file.download_as_bytearray()).decode("utf-8", errors="ignore")
         for line in content.splitlines():
             if card := parse_card(line):
                 new_cards.append(card)
@@ -184,24 +109,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if card := parse_card(line):
                 new_cards.append(card)
 
-    session.setdefault("cards", []).extend(new_cards)
+    session["cards"].extend(new_cards)
     total = len(session["cards"])
-    usa = sum(1 for c in session["cards"] if c.get("country", "US").upper() == "US")
 
     keyboard = [
-        [InlineKeyboardButton("Check", callback_data="check")],
-        [InlineKeyboardButton("Add More Cards", callback_data="add_more")],
-        [InlineKeyboardButton("Remove Cards", callback_data="remove")],
+        [InlineKeyboardButton("Check (Generate File)", callback_data="check")],
+        [InlineKeyboardButton("Add More Cards", callback_data="format")],
         [InlineKeyboardButton("Cancel", callback_data="cancel")]
     ]
 
-    pre_text = f"""Pre Summary/Confirmation
-Total Cards: {total}
-Total USA: {usa}
-Mode: {session.get('mode', 'Format').capitalize()}
-Test Mode: {'ON - Will skip to file' if TEST_MODE else 'OFF'}
-"""
-    await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(
+        f"Pre Summary\nTotal Cards: {total}\nTest Mode: {'ON' if TEST_MODE else 'OFF'}",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
@@ -210,36 +130,34 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = query.from_user.id
     session = user_sessions.get(uid)
     if not session or not session.get("cards"):
-        await query.edit_message_text("❌ No cards found.")
+        await query.edit_message_text("No cards found.")
         return
 
     if TEST_MODE:
-        content = "\n\n".join(format_live_card(c, test_mode=True) for c in session["cards"])
+        content = "\n\n".join(format_card(c, test_mode=True) for c in session["cards"])
         count = len(session["cards"])
-        filename = f"TestMode-Demo-{count}-{random.randint(1000,9999)}.txt"
+        filename = f"TestMode-Demo-{count}.txt"
 
         await query.message.reply_document(
             document=bytes(content, "utf-8"),
             filename=filename
         )
-        await query.edit_message_text(f"✅ TestMode Complete!\nSent {count} cards with 'TestMode Demo' header.")
+        await query.edit_message_text(f"✅ Done! Sent {count} cards as TestMode Demo.")
         user_sessions.pop(uid, None)
         return
 
-    # Normal mode (kept minimal)
-    await query.edit_message_text("Normal mode not fully implemented in this simplified version.")
+    await query.edit_message_text("Normal mode is not implemented in this version.")
 
 def main():
     app = Application.builder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("testmode", toggle_test_mode))
+    app.add_handler(CommandHandler("testmode", button_handler))  # alias
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(CallbackQueryHandler(check_handler, pattern="^check$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started - Test Mode: Skip directly to file")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    print("🚀 Bot Started - TestMode 'Skip to File' Enabled")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
