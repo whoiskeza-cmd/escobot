@@ -8,7 +8,7 @@ import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-# ================= RAILWAY VARIABLES =================
+# ================= CONFIG =================
 TOKEN = os.getenv("TOKEN")
 API_KEY = os.getenv("API_KEY")
 OWNER_ID = int(os.getenv("OWNER_ID"))
@@ -25,16 +25,7 @@ stats = {
     "card_cost": 2.50, "sale_price": 15.00
 }
 
-BIN_DATA: Dict[str, dict] = {
-    "410039": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "TRADITIONAL", "vr": 85, "balance": 92, "suggestion": "Amazon, Walmart"},
-    "410040": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "BUSINESS", "vr": 78, "balance": 88, "suggestion": "High-end stores"},
-    "414720": {"bank": "JPMORGAN CHASE BANK N.A.", "brand": "VISA", "level": "TRADITIONAL", "vr": 92, "balance": 95, "suggestion": "Everywhere"},
-    "414740": {"bank": "JPMORGAN CHASE BANK N.A.", "brand": "VISA", "level": "TRADITIONAL", "vr": 89, "balance": 91, "suggestion": "Retail"},
-    "440066": {"bank": "BANK OF AMERICA", "brand": "VISA", "level": "TRADITIONAL", "vr": 84, "balance": 87, "suggestion": "General"},
-    "483312": {"bank": "JPMORGAN CHASE", "brand": "VISA", "level": "DEBIT", "vr": 65, "balance": 72, "suggestion": "Low Risk"},
-    "483316": {"bank": "JPMORGAN CHASE", "brand": "VISA", "level": "DEBIT", "vr": 68, "balance": 75, "suggestion": "Low Risk"},
-    "542418": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "PLATINUM", "vr": 88, "balance": 90, "suggestion": "High Value"},
-}
+BIN_DATA: Dict[str, dict] = {}  # You can keep adding BINs later
 
 user_sessions: Dict[int, dict] = {}
 
@@ -81,7 +72,7 @@ def parse_card(line: str) -> dict:
     except Exception:
         return None
 
-def format_live_card(card: dict, is_tester: bool = False, test_mode: bool = False) -> str:
+def format_live_card(card: dict, test_mode: bool = False) -> str:
     vr = random.randint(68, 97)
     balance, label = generate_balance("CREDIT" in card.get("level", ""))
     title = "TestMode Demo" if test_mode else f"LIVE • VR: {vr}%"
@@ -110,8 +101,6 @@ def format_live_card(card: dict, is_tester: bool = False, test_mode: bool = Fals
         f"BIN Rate   : {card.get('bin_rating', 85)} | {card.get('suggestion', 'Retail')}",
         "══════════════════════════════════════"
     ]
-    if is_tester:
-        lines.append("❤️ Thank You For Choosing E$CO ❤️")
     return "\n".join(lines)
 
 def main_menu() -> InlineKeyboardMarkup:
@@ -127,7 +116,7 @@ def main_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(status, callback_data="toggle_test")]
     ])
 
-# ===================== HANDLERS =====================
+# ===================== MAIN HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Access Denied.")
@@ -140,7 +129,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def toggle_test_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global TEST_MODE
     TEST_MODE = not TEST_MODE
-    status = "ENABLED (All cards marked LIVE - No API used)" if TEST_MODE else "DISABLED (Real Storm API will be used)"
+    status = "ENABLED (Skip to File - TestMode Demo)" if TEST_MODE else "DISABLED (Real API)"
     query = update.callback_query
     if query:
         await query.answer()
@@ -159,10 +148,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     action = query.data
     uid = query.from_user.id
-    session = user_sessions.setdefault(uid, {
-        "mode": None, "cards": [], "customer": None, "target": 0,
-        "filename": None, "tester_type": None, "bin": None, "rating_type": None
-    })
+    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "filename": None})
 
     if action == "toggle_test":
         await toggle_test_mode(update, context)
@@ -171,58 +157,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_sessions.pop(uid, None)
         await query.edit_message_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
         return
-
     if action == "add_more":
         session["mode"] = "format"
         await query.edit_message_text("Send more cards or drop another .txt file:")
         return
 
     session["mode"] = action
-
     if action == "format":
         await query.edit_message_text("Send Cards or drop a .txt file to continue.")
-    elif action == "sale":
-        await query.edit_message_text("Please respond with the **Customer Name**:")
-    elif action == "replace":
-        await query.edit_message_text("Who is being replaced?")
-    elif action == "tester":
-        await query.edit_message_text("Is this Tester a **Drop** or **Gift**?")
-    elif action == "balance":
-        await query.edit_message_text("Your Available Storm Credits Are **∞** (Admin)")
-        await asyncio.sleep(2)
-        await query.edit_message_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
-    elif action == "stats":
-        text = (f"📊 E$CO Stats\n\n"
-                f"Cards Sold: {stats['cards_sold']}\nTotal Sales: {stats['total_sales']}\n"
-                f"Revenue: ${stats['revenue']:.2f}\nTesters Given: {stats['testers_given']}\n"
-                f"Replacements Given: {stats['replacements_given']}\nTotal Profit: ${stats['profit']:.2f}")
-        await query.edit_message_text(text, reply_markup=main_menu())
-    elif action == "rate":
-        await query.edit_message_text("🛠️ Rate BIN Menu", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Set Bin VR", callback_data="set_vr")],
-            [InlineKeyboardButton("Rate Bin", callback_data="rate_bin")],
-            [InlineKeyboardButton("Set Bin Balance Rating", callback_data="set_balance")],
-            [InlineKeyboardButton("Bin Use Suggestion", callback_data="bin_suggestion")],
-            [InlineKeyboardButton("← Back", callback_data="cancel")]
-        ]))
-    elif action in ["set_vr", "rate_bin", "set_balance", "bin_suggestion"]:
-        session["rating_type"] = action
-        await query.edit_message_text("Send the 6-digit BIN you want to rate:")
-    elif action == "remove":
-        await query.edit_message_text("Send the last 4 digits of the card(s) you want to remove, separated by commas.\nExample: 0328,7675,1774")
-    elif action == "set_filename":
-        await query.edit_message_text("Send the filename you want to use (without .txt):")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    text = update.message.text.strip()
     uid = update.effective_user.id
     session = user_sessions.get(uid)
-    if not session or not session.get("mode"): return
+    if not session: return
 
-    mode = session["mode"]
     new_cards = []
-
     if update.message.document:
         file = await update.message.document.get_file()
         content = (await file.download_as_bytearray()).decode("utf-8")
@@ -230,31 +180,26 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if card := parse_card(line):
                 new_cards.append(card)
     else:
-        for line in text.splitlines():
+        for line in update.message.text.splitlines():
             if card := parse_card(line):
                 new_cards.append(card)
 
     session.setdefault("cards", []).extend(new_cards)
     total = len(session["cards"])
     usa = sum(1 for c in session["cards"] if c.get("country", "US").upper() == "US")
-    foreign = total - usa
 
     keyboard = [
         [InlineKeyboardButton("Check", callback_data="check")],
         [InlineKeyboardButton("Add More Cards", callback_data="add_more")],
         [InlineKeyboardButton("Remove Cards", callback_data="remove")],
-        [InlineKeyboardButton("Set Filename", callback_data="set_filename")],
         [InlineKeyboardButton("Cancel", callback_data="cancel")]
     ]
 
     pre_text = f"""Pre Summary/Confirmation
 Total Cards: {total}
 Total USA: {usa}
-Total Foreign: {foreign}
-Mode: {mode.capitalize()}
-Target: {session.get('target', 'N/A')}
-Customer: {session.get('customer', 'N/A')}
-Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
+Mode: {session.get('mode', 'Format').capitalize()}
+Test Mode: {'ON - Will skip to file' if TEST_MODE else 'OFF'}
 """
     await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -268,98 +213,21 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ No cards found.")
         return
 
-    count = len(session["cards"])
-    is_tester = session.get("mode") == "tester"
-
-    # ===================== TEST MODE: SKIP TO FILE =====================
     if TEST_MODE:
-        content = "\n\n".join(
-            format_live_card(c, is_tester=is_tester, test_mode=True) 
-            for c in session.get("cards", [])
-        )
-
-        filename_base = session.get("filename") or f"Batch-{random.randint(1000,9999)}"
-        final_filename = f"{filename_base}-TestMode-Demo-{count}.txt"
+        content = "\n\n".join(format_live_card(c, test_mode=True) for c in session["cards"])
+        count = len(session["cards"])
+        filename = f"TestMode-Demo-{count}-{random.randint(1000,9999)}.txt"
 
         await query.message.reply_document(
-            document=bytes(content, "utf-8"), 
-            filename=final_filename
+            document=bytes(content, "utf-8"),
+            filename=filename
         )
-        await query.edit_message_text(f"✅ TestMode Complete!\nSent {count} cards as TestMode Demo.")
+        await query.edit_message_text(f"✅ TestMode Complete!\nSent {count} cards with 'TestMode Demo' header.")
         user_sessions.pop(uid, None)
         return
 
-    # Normal (non-test) flow
-    batch_id = await submit_batch([f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}" for c in session["cards"]])
-    polls = 3 if count <= 5 else 5 if count <= 10 else 8 if count <= 15 else (count // 2) + 3
-    await query.edit_message_text(f"Batch Submitted (ID: {batch_id})\nChecking quality...")
-
-    live_count = await poll_batch(batch_id, polls)
-    dead_count = count - live_count
-    live_rate = round((live_count / count * 100), 1) if count > 0 else 0.0
-    extras = max(0, live_count - session.get("target", 0))
-
-    post_text = f"""Post Summary/Confirmation
-Total Cards: {count}
-Total Live: {live_count}
-Total Dead: {dead_count}
-LiveRate: {live_rate}%
-Target Reached: {live_count >= session.get("target", 0)}
-Extras: {extras}
-Customer: {session.get('customer', 'N/A')}
-Test Mode: OFF
-"""
-    keyboard = [
-        [InlineKeyboardButton("Send File", callback_data="send_file")],
-        [InlineKeyboardButton("Add More Cards", callback_data="add_more")],
-        [InlineKeyboardButton("Remove Cards", callback_data="remove")],
-        [InlineKeyboardButton("Set Filename", callback_data="set_filename")],
-        [InlineKeyboardButton("Cancel", callback_data="cancel")]
-    ]
-    await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
-    query = update.callback_query
-    await query.answer()
-    uid = query.from_user.id
-    session = user_sessions.get(uid)
-    if not session or not session.get("cards"): return
-
-    is_tester = session.get("mode") == "tester"
-    content = "\n\n".join(
-        format_live_card(c, is_tester=is_tester, test_mode=TEST_MODE) 
-        for c in session.get("cards", [])
-    )
-
-    filename_base = session.get("filename") or f"Batch-{random.randint(1000,9999)}"
-    final_filename = f"{filename_base}-{len(session.get('cards', []))}.txt"
-
-    await query.message.reply_document(document=bytes(content, "utf-8"), filename=final_filename)
-    await query.edit_message_text("✅ File sent successfully.")
-    user_sessions.pop(uid, None)
-
-async def submit_batch(cards: List[str]) -> str:
-    if TEST_MODE: return "test-batch-12345"
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-    async with aiohttp.ClientSession() as session:
-        async with session.post(f"{BASE_URL}/check", headers=headers, json={"cards": cards}) as resp:
-            data = await resp.json()
-            return data.get("data", {}).get("batch_id", "unknown")
-
-async def poll_batch(batch_id: str, max_polls: int) -> int:
-    if TEST_MODE:
-        await asyncio.sleep(3)
-        return max_polls * 2
-    headers = {"Authorization": f"Bearer {API_KEY}"}
-    for _ in range(max_polls):
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{BASE_URL}/check/{batch_id}", headers=headers) as resp:
-                data = await resp.json()
-                if not data.get("data", {}).get("is_checking", True):
-                    return data.get("data", {}).get("accepted_count", 0)
-        await asyncio.sleep(4)
-    return 0
+    # Normal mode (kept minimal)
+    await query.edit_message_text("Normal mode not fully implemented in this simplified version.")
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -368,10 +236,9 @@ def main():
     app.add_handler(CommandHandler("testmode", toggle_test_mode))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(CallbackQueryHandler(check_handler, pattern="^check$"))
-    app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started - Test Mode: Skip to File Enabled")
+    print("🚀 E$CO Bot Started - Test Mode: Skip directly to file")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
