@@ -67,7 +67,7 @@ def save_data():
 
 load_data()
 
-# ===================== BIN DATABASE =====================
+# ===================== BIN DATABASE (Updated) =====================
 DEFAULT_BINS = {
     "410039": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "TRADITIONAL", "rating": 92, "suggestion": "Amazon, Walmart", "type": "CREDIT"},
     "410040": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "BUSINESS", "rating": 85, "suggestion": "High-end stores", "type": "CREDIT"},
@@ -77,6 +77,10 @@ DEFAULT_BINS = {
     "483316": {"bank": "JPMORGAN CHASE BANK N.A. - DEBIT", "brand": "VISA", "level": "CLASSIC", "rating": 70, "suggestion": "Low Risk", "type": "DEBIT"},
     "542418": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "PLATINUM", "rating": 91, "suggestion": "High Value", "type": "CREDIT"},
     "546616": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "WORLD", "rating": 93, "suggestion": "Luxury", "type": "CREDIT"},
+    # Newly Added BINS
+    "513371": {"bank": "NEWDAY, LTD.", "brand": "MASTERCARD", "level": "STANDARD", "rating": 80, "suggestion": "UK Retail", "type": "CREDIT"},
+    "513379": {"bank": "BANQUE FEDERATIVE DU CREDIT MUTUEL (BFCM)", "brand": "MASTERCARD", "level": "STANDARD", "rating": 75, "suggestion": "France Retail", "type": "DEBIT"},
+    "521729": {"bank": "COMMONWEALTH BANK OF AUSTRALIA", "brand": "MASTERCARD", "level": "STANDARD", "rating": 85, "suggestion": "Australia General", "type": "DEBIT"},
 }
 
 for bin6, info in DEFAULT_BINS.items():
@@ -104,8 +108,13 @@ def generate_balance(is_credit: bool) -> tuple:
 
 def parse_card(line: str) -> Optional[dict]:
     try:
-        parts = [p.strip() for p in line.replace("||", "|").split("|")]
-        if len(parts) < 8: return None
+        # Support both old and new format (with extra |null|null at the end)
+        cleaned = line.replace("||", "|").strip()
+        parts = [p.strip() for p in cleaned.split("|")]
+        
+        if len(parts) < 8:
+            return None
+
         card = parts[0].replace(" ", "")
         exp_raw = parts[1].replace("/", "").replace(" ", "")
         mm = exp_raw[:2]
@@ -131,7 +140,8 @@ def parse_card(line: str) -> Optional[dict]:
             "bin_rating": info["rating"], "suggestion": info["suggestion"],
             "type": info.get("type", "CREDIT")
         }
-    except:
+    except Exception as e:
+        logger.debug(f"Parse failed: {e}")
         return None
 
 def format_card(card: dict, is_tester: bool = False) -> str:
@@ -367,7 +377,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_remove(update, context)
         return
 
-    # Card Input
+    # Card Input - Now supports the new Australian format
     if session.get("step") in ["waiting_cards", "add_more"]:
         new_cards = []
         if update.message.document:
@@ -388,7 +398,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("⚠️ No valid cards detected.")
 
-# ===================== PRE SUMMARY =====================
+# ===================== PRE & POST SUMMARY =====================
 async def show_pre_summary(update: Update, session: dict, uid: int):
     total = len(session["cards"])
     usa = sum(1 for c in session["cards"] if c.get("country","US").upper() == "US")
@@ -404,7 +414,6 @@ Filename      : {session.get('filename', 'Batch-####')}
 
     await update.message.reply_html(text, reply_markup=PRE_BUTTONS)
 
-# ===================== CHECK HANDLER =====================
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid = query.from_user.id
@@ -572,7 +581,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v12.2 - Pre-Summary Buttons Fully Fixed")
+    print("🚀 FactoryVHQ v12.3 - New Format + New BINS Added")
     print(f"   Admins: {len(ADMIN_IDS)} | Test Mode: {TEST_MODE}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
