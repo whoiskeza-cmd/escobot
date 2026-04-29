@@ -67,7 +67,7 @@ def save_data():
 
 load_data()
 
-# ===================== BIN DATABASE (Updated) =====================
+# ===================== BIN DATABASE =====================
 DEFAULT_BINS = {
     "410039": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "TRADITIONAL", "rating": 92, "suggestion": "Amazon, Walmart", "type": "CREDIT"},
     "410040": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "BUSINESS", "rating": 85, "suggestion": "High-end stores", "type": "CREDIT"},
@@ -77,7 +77,6 @@ DEFAULT_BINS = {
     "483316": {"bank": "JPMORGAN CHASE BANK N.A. - DEBIT", "brand": "VISA", "level": "CLASSIC", "rating": 70, "suggestion": "Low Risk", "type": "DEBIT"},
     "542418": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "PLATINUM", "rating": 91, "suggestion": "High Value", "type": "CREDIT"},
     "546616": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "WORLD", "rating": 93, "suggestion": "Luxury", "type": "CREDIT"},
-    # Newly Added BINS
     "513371": {"bank": "NEWDAY, LTD.", "brand": "MASTERCARD", "level": "STANDARD", "rating": 80, "suggestion": "UK Retail", "type": "CREDIT"},
     "513379": {"bank": "BANQUE FEDERATIVE DU CREDIT MUTUEL (BFCM)", "brand": "MASTERCARD", "level": "STANDARD", "rating": 75, "suggestion": "France Retail", "type": "DEBIT"},
     "521729": {"bank": "COMMONWEALTH BANK OF AUSTRALIA", "brand": "MASTERCARD", "level": "STANDARD", "rating": 85, "suggestion": "Australia General", "type": "DEBIT"},
@@ -108,12 +107,9 @@ def generate_balance(is_credit: bool) -> tuple:
 
 def parse_card(line: str) -> Optional[dict]:
     try:
-        # Support both old and new format (with extra |null|null at the end)
         cleaned = line.replace("||", "|").strip()
         parts = [p.strip() for p in cleaned.split("|")]
-        
-        if len(parts) < 8:
-            return None
+        if len(parts) < 8: return None
 
         card = parts[0].replace(" ", "")
         exp_raw = parts[1].replace("/", "").replace(" ", "")
@@ -140,13 +136,14 @@ def parse_card(line: str) -> Optional[dict]:
             "bin_rating": info["rating"], "suggestion": info["suggestion"],
             "type": info.get("type", "CREDIT")
         }
-    except Exception as e:
-        logger.debug(f"Parse failed: {e}")
+    except:
         return None
 
 def format_card(card: dict, is_tester: bool = False) -> str:
     bin6 = card["card"][:6]
+    # FORCE VR LOGIC - NOW FIXED
     vr = BIN_FORCE_VR.get(bin6, random.randint(78, 97))
+    
     balance, label = generate_balance(card.get("type") == "CREDIT")
 
     lines = [
@@ -236,7 +233,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_sessions.pop(update.effective_user.id, None)
     await update.message.reply_text("✅ Returned to FactoryVHQ Admin Panel.", reply_markup=main_menu())
 
-# ===================== MAIN BUTTON HANDLER =====================
+# ===================== BUTTON HANDLER (Fixed Sale & Force VR) =====================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -258,22 +255,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "check":
         await check_handler(update, context)
         return
-
     if action == "send_file":
         await send_file_handler(update, context)
         return
-
     if action == "remove_cards":
         await remove_cards_handler(update, context)
         return
-
     if action == "set_filename":
         await set_filename_handler(update, context)
         return
-
     if action == "add_more":
         session["step"] = "waiting_cards"
         await query.edit_message_text("Please send more cards or drop another .txt file.")
+        return
+
+    # FIXED: Sale button was wrongly going to BIN manager
+    if action == "sale":
+        session["mode"] = "sale"
+        session["cards"] = []
+        session["filename"] = None
+        session["customer"] = None
+        session["target"] = 0
+        session["in_post_summary"] = False
+        await query.edit_message_text(panel("SALE MODE") + "\nPlease send the Customer Name:")
+        session["step"] = "waiting_customer"
         return
 
     if action == "rate":
@@ -286,7 +291,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Send 6-digit BIN:")
         return
 
-    # Start new mode
+    # Default mode start
     session["mode"] = action
     session["cards"] = []
     session["filename"] = None
@@ -297,9 +302,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "format":
         await query.edit_message_text(panel("FORMAT MODE") + "\nSend Cards or drop a .txt file to continue.")
         session["step"] = "waiting_cards"
-    elif action == "sale":
-        await query.edit_message_text(panel("SALE MODE") + "\nPlease send the Customer Name:")
-        session["step"] = "waiting_customer"
     elif action == "replace":
         await query.edit_message_text(panel("REPLACE MODE") + "\nWho is being replaced?")
         session["step"] = "waiting_customer"
@@ -354,13 +356,36 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session["current_bin"] = bin6
         if bin6 not in BIN_DATABASE:
             BIN_DATABASE[bin6] = {"bank":"UNKNOWN","brand":"VISA","level":"STANDARD","rating":75,"suggestion":"Retail","type":"CREDIT"}
-        await update.message.reply_text(f"✅ BIN {bin6} selected.\nSend new value:")
+        await update.message.reply_text(f"✅ BIN {bin6} selected.\nWhat value do you want to set?")
         session["step"] = "waiting_value"
         return
 
     if session.get("step") == "waiting_value":
+        action = session.get("rate_action")
+        bin6 = session.get("current_bin")
+        if action == "force_vr":
+            if text.upper() == "RESET":
+                BIN_FORCE_VR.pop(bin6, None)
+                await update.message.reply_text(f"✅ Force VR for BIN {bin6} has been reset.")
+            else:
+                try:
+                    BIN_FORCE_VR[bin6] = int(text)
+                    await update.message.reply_text(f"✅ Force VR for BIN {bin6} set to {text}%")
+                except:
+                    await update.message.reply_text("❌ Please send a number or 'RESET'.")
+        else:
+            try:
+                val = int(text)
+                if action in ["set_vr", "rate_bin"]:
+                    BIN_DATABASE[bin6]["rating"] = val
+                elif action == "set_balance":
+                    BIN_DATABASE[bin6]["balance_rating"] = val
+                elif action == "set_suggestion":
+                    BIN_DATABASE[bin6]["suggestion"] = text
+                await update.message.reply_text("✅ BIN updated successfully!")
+            except:
+                await update.message.reply_text("❌ Invalid input.")
         session["step"] = "idle"
-        await update.message.reply_text("✅ BIN updated.", reply_markup=main_menu())
         save_data()
         return
 
@@ -377,7 +402,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_remove(update, context)
         return
 
-    # Card Input - Now supports the new Australian format
     if session.get("step") in ["waiting_cards", "add_more"]:
         new_cards = []
         if update.message.document:
@@ -398,7 +422,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("⚠️ No valid cards detected.")
 
-# ===================== PRE & POST SUMMARY =====================
+# ===================== SUMMARY FUNCTIONS =====================
 async def show_pre_summary(update: Update, session: dict, uid: int):
     total = len(session["cards"])
     usa = sum(1 for c in session["cards"] if c.get("country","US").upper() == "US")
@@ -581,7 +605,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v12.3 - New Format + New BINS Added")
+    print("🚀 FactoryVHQ v12.4 - Force VR Fixed + Sale Button Fixed")
     print(f"   Admins: {len(ADMIN_IDS)} | Test Mode: {TEST_MODE}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
