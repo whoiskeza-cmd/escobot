@@ -8,26 +8,11 @@ import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-# ================= LOAD RAILWAY VARIABLES (Exact names from your image) =================
+# ================= RAILWAY VARIABLES (from your screenshot) =================
 TOKEN = os.getenv("TOKEN")
 API_KEY = os.getenv("API_KEY")
-OWNER_ID_STR = os.getenv("OWNER_ID")
-BASE_URL = os.getenv("BASE_URL")
-
-# Safety checks
-if not TOKEN:
-    raise ValueError("❌ TOKEN is not set!")
-if not API_KEY:
-    raise ValueError("❌ API_KEY is not set!")
-if not OWNER_ID_STR:
-    raise ValueError("❌ OWNER_ID is not set! Please add your Telegram numeric ID.")
-if not BASE_URL:
-    raise ValueError("❌ BASE_URL is not set!")
-
-try:
-    OWNER_ID = int(OWNER_ID_STR)
-except ValueError:
-    raise ValueError("❌ OWNER_ID must be a numeric Telegram ID")
+OWNER_ID = int(os.getenv("OWNER_ID"))
+BASE_URL = os.getenv("BASE_URL", "https://api.storm.gift/api/v1")
 
 print(f"✅ Bot starting for OWNER_ID: {OWNER_ID}")
 print(f"🌐 Using BASE_URL: {BASE_URL}")
@@ -165,7 +150,7 @@ def main_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(status, callback_data="toggle_test")]
     ])
 
-# ===================== COMMANDS =====================
+# ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Access Denied.")
@@ -184,7 +169,6 @@ async def toggle_test_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🔧 Test Mode is now **{status}**", parse_mode='HTML')
     await start(update, context)
 
-# ===================== BUTTON HANDLER =====================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.callback_query.answer("Access Denied.", show_alert=True)
@@ -250,7 +234,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "set_filename":
         await query.edit_message_text("Send the filename you want to use (without .txt):")
 
-# ===================== MESSAGE HANDLER =====================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     text = update.message.text.strip()
@@ -260,10 +243,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = session["mode"]
 
-    if session.get("mode") == "set_filename":
+    # Set Filename
+    if mode == "set_filename":
         session["filename"] = text.strip()
         await update.message.reply_text(f"✅ Filename set to: **{session['filename']}**", parse_mode='HTML')
-        session["mode"] = session.get("previous_mode", "format")
+        session["mode"] = "format"
+        # Re-show summary
         total = len(session.get("cards", []))
         usa = sum(1 for c in session.get("cards", []) if c.get("country", "US").upper() == "US")
         foreign = total - usa
@@ -286,6 +271,7 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
+    # Remove Cards by last 4
     if any(x.isdigit() and len(x.strip()) == 4 for x in text.replace(" ", "").split(",")):
         to_remove = {x.strip() for x in text.split(",") if x.strip().isdigit() and len(x.strip()) == 4}
         original = len(session.get("cards", []))
@@ -293,6 +279,7 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         removed = original - len(session.get("cards", []))
         await update.message.reply_text(f"✅ Removed {removed} card(s).")
 
+    # Rate BIN logic
     if mode in ["set_vr", "rate_bin", "set_balance", "bin_suggestion"] and not session.get("bin"):
         bin6 = text[:6]
         if bin6.isdigit():
@@ -326,6 +313,7 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         await update.message.reply_text("✅ Rating updated. Returning to Admin Panel.", reply_markup=main_menu())
         return
 
+    # Normal card input flow
     if mode == "sale" and not session.get("customer"):
         session["customer"] = text
         await update.message.reply_text("How many cards is this customer purchasing?")
@@ -349,6 +337,7 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         await update.message.reply_text("Send cards or drop a .txt file to continue.")
         return
 
+    # Parse cards
     new_cards = []
     if update.message.document:
         file = await update.message.document.get_file()
@@ -456,7 +445,7 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("✅ File sent successfully.")
     user_sessions.pop(uid, None)
 
-# ===================== LAUNCH =====================
+# ===================== MAIN =====================
 def main():
     app = Application.builder().token(TOKEN).build()
 
@@ -468,7 +457,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
     print("🚀 E$CO Admin Panel Bot Started Successfully")
-    app.run_polling()
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
