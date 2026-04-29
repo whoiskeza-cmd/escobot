@@ -141,8 +141,12 @@ def parse_card(line: str) -> Optional[dict]:
 
 def format_card(card: dict, is_tester: bool = False) -> str:
     bin6 = card["card"][:6]
-    # FORCE VR LOGIC - NOW FIXED
-    vr = BIN_FORCE_VR.get(bin6, random.randint(78, 97))
+    
+    # FORCE VR - NOW GUARANTEED
+    if bin6 in BIN_FORCE_VR:
+        vr = BIN_FORCE_VR[bin6]
+    else:
+        vr = random.randint(78, 97)
     
     balance, label = generate_balance(card.get("type") == "CREDIT")
 
@@ -233,7 +237,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_sessions.pop(update.effective_user.id, None)
     await update.message.reply_text("✅ Returned to FactoryVHQ Admin Panel.", reply_markup=main_menu())
 
-# ===================== BUTTON HANDLER (Fixed Sale & Force VR) =====================
+# ===================== BUTTON HANDLER =====================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -269,18 +273,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Please send more cards or drop another .txt file.")
         return
 
-    # FIXED: Sale button was wrongly going to BIN manager
-    if action == "sale":
-        session["mode"] = "sale"
-        session["cards"] = []
-        session["filename"] = None
-        session["customer"] = None
-        session["target"] = 0
-        session["in_post_summary"] = False
-        await query.edit_message_text(panel("SALE MODE") + "\nPlease send the Customer Name:")
-        session["step"] = "waiting_customer"
-        return
-
     if action == "rate":
         await query.edit_message_text(panel("BIN MANAGER"), reply_markup=rate_menu())
         return
@@ -291,7 +283,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Send 6-digit BIN:")
         return
 
-    # Default mode start
+    # Start new mode
     session["mode"] = action
     session["cards"] = []
     session["filename"] = None
@@ -302,6 +294,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "format":
         await query.edit_message_text(panel("FORMAT MODE") + "\nSend Cards or drop a .txt file to continue.")
         session["step"] = "waiting_cards"
+    elif action == "sale":
+        await query.edit_message_text(panel("SALE MODE") + "\nPlease send the Customer Name:")
+        session["step"] = "waiting_customer"
     elif action == "replace":
         await query.edit_message_text(panel("REPLACE MODE") + "\nWho is being replaced?")
         session["step"] = "waiting_customer"
@@ -363,6 +358,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if session.get("step") == "waiting_value":
         action = session.get("rate_action")
         bin6 = session.get("current_bin")
+        if not bin6:
+            await update.message.reply_text("❌ No BIN selected.")
+            return
+
         if action == "force_vr":
             if text.upper() == "RESET":
                 BIN_FORCE_VR.pop(bin6, None)
@@ -370,7 +369,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 try:
                     BIN_FORCE_VR[bin6] = int(text)
-                    await update.message.reply_text(f"✅ Force VR for BIN {bin6} set to {text}%")
+                    await update.message.reply_text(f"✅ Force VR for BIN {bin6} successfully set to {text}%")
                 except:
                     await update.message.reply_text("❌ Please send a number or 'RESET'.")
         else:
@@ -422,7 +421,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("⚠️ No valid cards detected.")
 
-# ===================== SUMMARY FUNCTIONS =====================
+# ===================== SUMMARY =====================
 async def show_pre_summary(update: Update, session: dict, uid: int):
     total = len(session["cards"])
     usa = sum(1 for c in session["cards"] if c.get("country","US").upper() == "US")
@@ -452,15 +451,8 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Please wait up to 30 seconds while we begin quality checking..."
     )
 
-    if TEST_MODE:
-        await asyncio.sleep(2.0)
-        session["in_post_summary"] = True
-        get_stats(uid)["total_cards_checked"] += len(session["cards"])
-        await show_post_summary(query, session, uid)
-        return
-
-    batch_id = "batch-00000"
-    await storm_poll(batch_id, len(session["cards"]))
+    # NO API CALL - FULLY BYPASSED (as requested)
+    await asyncio.sleep(2.0)
     session["in_post_summary"] = True
     get_stats(uid)["total_cards_checked"] += len(session["cards"])
     await show_post_summary(query, session, uid)
@@ -587,15 +579,6 @@ def rate_menu():
         [InlineKeyboardButton("← Back to Panel", callback_data="back_main")]
     ])
 
-async def storm_poll(batch_id: str, total_cards: int):
-    if TEST_MODE:
-        await asyncio.sleep(2)
-        return
-    poll_map = {range(0,6):3, range(6,11):5, range(11,16):8, range(16,31):12, range(31,51):18, range(51,101):25}
-    polls = next((v for r,v in poll_map.items() if total_cards in r), 30)
-    for _ in range(polls):
-        await asyncio.sleep(2.0)
-
 # ===================== MAIN =====================
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -605,7 +588,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v12.4 - Force VR Fixed + Sale Button Fixed")
+    print("🚀 FactoryVHQ v12.5 - Force VR Fixed + No API Calls")
     print(f"   Admins: {len(ADMIN_IDS)} | Test Mode: {TEST_MODE}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
