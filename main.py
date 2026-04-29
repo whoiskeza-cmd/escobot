@@ -4,30 +4,25 @@ from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-# ===================== CONFIG =====================
 TOKEN = os.getenv("TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
 
 TEST_MODE = False
 user_sessions = {}
 
-# ===================== BIN DATA =====================
 BIN_DATA = {
     "410039": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "TRADITIONAL", "rating": 85, "suggestion": "Amazon, Walmart"},
     "410040": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "BUSINESS", "rating": 78, "suggestion": "High-end stores"},
     "414720": {"bank": "JPMORGAN CHASE BANK N.A.", "brand": "VISA", "level": "TRADITIONAL", "rating": 92, "suggestion": "Everywhere"},
     "414740": {"bank": "JPMORGAN CHASE BANK N.A.", "brand": "VISA", "level": "TRADITIONAL", "rating": 89, "suggestion": "Retail"},
     "440066": {"bank": "BANK OF AMERICA", "brand": "VISA", "level": "TRADITIONAL", "rating": 84, "suggestion": "General"},
-    "483312": {"bank": "JPMORGAN CHASE", "brand": "VISA", "level": "DEBIT", "rating": 65, "suggestion": "Low Risk"},
-    "483316": {"bank": "JPMORGAN CHASE", "brand": "VISA", "level": "DEBIT", "rating": 68, "suggestion": "Low Risk"},
     "542418": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "PLATINUM", "rating": 88, "suggestion": "High Value"},
 }
 
-# ===================== HELPERS =====================
-def get_random_ip() -> str:
+def get_random_ip():
     return f"{random.randint(25,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(10,250)}"
 
-def generate_balance(is_credit: bool) -> tuple:
+def generate_balance(is_credit: bool):
     if random.random() < 0.03:
         bal = round(random.uniform(3200, 9200), 2)
     else:
@@ -35,7 +30,7 @@ def generate_balance(is_credit: bool) -> tuple:
     label = "Available Credit" if is_credit else "Balance"
     return bal, label
 
-def parse_card(line: str) -> dict:
+def parse_card(line: str):
     try:
         parts = [p.strip() for p in line.split("|")]
         if len(parts) < 8: return None
@@ -110,7 +105,6 @@ def main_menu():
         [InlineKeyboardButton(status, callback_data="toggle_test")]
     ])
 
-# ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Access Denied.")
@@ -134,10 +128,11 @@ async def toggle_test_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     query = update.callback_query
-    await query.answer()
     action = query.data
     uid = query.from_user.id
     session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "filename": None})
+
+    await query.answer()
 
     if action == "toggle_test":
         await toggle_test_mode(update, context)
@@ -147,8 +142,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
         return
 
+    if action == "check":
+        await check_handler(update, context)
+        return
+
     session["mode"] = action
-    if action in ["format", "tester"]:
+    if action in ["format", "tester", "sale", "replace"]:
         await query.edit_message_text("Send Cards or drop a .txt file to continue.")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -192,11 +191,8 @@ Filename: {session.get('filename', 'None')}
     await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """This now correctly goes to Post Summary"""
-    if update.effective_user.id != OWNER_ID: return
+    """Directly shows Post Summary when Check is pressed"""
     query = update.callback_query
-    await query.answer("Processing...")
-
     uid = query.from_user.id
     session = user_sessions.get(uid)
     if not session or not session.get("cards"):
@@ -227,10 +223,7 @@ LiveRate: {live_rate}%
     await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
     query = update.callback_query
-    await query.answer("Generating file...")
-
     uid = query.from_user.id
     session = user_sessions.get(uid)
     if not session or not session.get("cards"):
@@ -262,7 +255,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 E$CO Bot Started - Pre Summary → Post Summary → File Now Working in Test Mode")
+    print("🚀 E$CO Bot Started - Check button should now work correctly")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
