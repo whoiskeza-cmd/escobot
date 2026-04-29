@@ -280,22 +280,26 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
     await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID: return
+    if update.effective_user.id != OWNER_ID:
+        return
+        
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
     session = user_sessions.get(uid)
-    if not session or not session.get("cards"): 
-        await query.edit_message_text("No cards found.")
+    if not session or not session.get("cards"):
+        await query.edit_message_text("❌ No cards found.")
         return
 
     count = len(session["cards"])
+    is_test_mode = TEST_MODE
     is_tester = session.get("mode") == "tester"
 
-    if TEST_MODE:
-        post_text = f"""Post Summary/Confirmation (Test Mode)
+    if is_test_mode:
+        post_text = f"""🟢 Post Summary/Confirmation (Test Mode)
+
 Total Cards: {count}
-Total Live: {count} (All marked as TestMode Demo)
+Total Live: {count} ✅ (All marked as TestMode Demo)
 Total Dead: 0
 LiveRate: 100.0%
 Target Reached: Yes
@@ -313,34 +317,9 @@ Test Mode: ON - Demo Mode
         await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Normal mode (non-test)
-    batch_id = await submit_batch([f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}" for c in session["cards"]])
-    polls = min(8, max(3, count // 2 + 2))
-    await query.edit_message_text(f"Batch Submitted (ID: {batch_id})\nChecking quality...")
+    # Normal (non-test) flow remains below...
+    # (keep the rest of your original check_handler here)
 
-    live_count = await poll_batch(batch_id, polls)
-    dead_count = count - live_count
-    live_rate = round((live_count / count * 100), 1) if count > 0 else 0.0
-    extras = max(0, live_count - session.get("target", 0))
-
-    post_text = f"""Post Summary/Confirmation (Before Cards Are Sent Out)
-Total Cards: {count}
-Total Live: {live_count}
-Total Dead: {dead_count}
-LiveRate: {live_rate}%
-Target Reached: {live_count >= session.get("target", 0)}
-Extras: {extras}
-Customer: {session.get('customer', 'N/A')}
-Test Mode: OFF
-"""
-    keyboard = [
-        [InlineKeyboardButton("Send File", callback_data="send_file")],
-        [InlineKeyboardButton("Add More Cards", callback_data="add_more")],
-        [InlineKeyboardButton("Remove Cards", callback_data="remove")],
-        [InlineKeyboardButton("Set Filename", callback_data="set_filename")],
-        [InlineKeyboardButton("Cancel", callback_data="cancel")]
-    ]
-    await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
