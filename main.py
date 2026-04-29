@@ -8,7 +8,7 @@ import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-# ================= RAILWAY VARIABLES (from your screenshot) =================
+# ================= RAILWAY VARIABLES =================
 TOKEN = os.getenv("TOKEN")
 API_KEY = os.getenv("API_KEY")
 OWNER_ID = int(os.getenv("OWNER_ID"))
@@ -243,12 +243,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = session["mode"]
 
-    # Set Filename
     if mode == "set_filename":
         session["filename"] = text.strip()
         await update.message.reply_text(f"✅ Filename set to: **{session['filename']}**", parse_mode='HTML')
         session["mode"] = "format"
-        # Re-show summary
         total = len(session.get("cards", []))
         usa = sum(1 for c in session.get("cards", []) if c.get("country", "US").upper() == "US")
         foreign = total - usa
@@ -271,7 +269,6 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Remove Cards by last 4
     if any(x.isdigit() and len(x.strip()) == 4 for x in text.replace(" ", "").split(",")):
         to_remove = {x.strip() for x in text.split(",") if x.strip().isdigit() and len(x.strip()) == 4}
         original = len(session.get("cards", []))
@@ -279,7 +276,6 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         removed = original - len(session.get("cards", []))
         await update.message.reply_text(f"✅ Removed {removed} card(s).")
 
-    # Rate BIN logic
     if mode in ["set_vr", "rate_bin", "set_balance", "bin_suggestion"] and not session.get("bin"):
         bin6 = text[:6]
         if bin6.isdigit():
@@ -313,7 +309,6 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         await update.message.reply_text("✅ Rating updated. Returning to Admin Panel.", reply_markup=main_menu())
         return
 
-    # Normal card input flow
     if mode == "sale" and not session.get("customer"):
         session["customer"] = text
         await update.message.reply_text("How many cards is this customer purchasing?")
@@ -337,7 +332,6 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         await update.message.reply_text("Send cards or drop a .txt file to continue.")
         return
 
-    # Parse cards
     new_cards = []
     if update.message.document:
         file = await update.message.document.get_file()
