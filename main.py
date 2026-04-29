@@ -5,6 +5,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
@@ -17,8 +18,8 @@ logger = logging.getLogger("FactoryVHQ")
 
 # ===================== CONFIG =====================
 TOKEN = os.getenv("TOKEN")
-STORM_API_URL = os.getenv("STORM_API_URL", "https://api.stormcheck.cc")
-STORM_API_KEY = os.getenv("STORM_API_KEY")
+API_BASE = "https://api.storm.gift/api/v1"
+API_KEY = os.getenv("STORM_API_KEY")
 
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
@@ -50,7 +51,6 @@ def load_data():
                 BIN_DATABASE = data.get("BIN_DATABASE", {})
                 BIN_FORCE_VR = data.get("BIN_FORCE_VR", {})
                 user_stats = data.get("user_stats", {})
-                logger.info("✅ FactoryVHQ Data Loaded")
         except Exception as e:
             logger.error(f"Load error: {e}")
 
@@ -96,12 +96,18 @@ def random_ip() -> str:
     return f"{random.randint(25,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(10,250)}"
 
 def generate_balance(is_credit: bool) -> tuple:
-    if random.random() < 0.03:
-        bal = round(random.uniform(3200, 12800), 2)
-    elif random.random() < 0.65:
-        bal = round(random.uniform(85, 1099), 2)
-    else:
-        bal = round(random.uniform(1100, 3100), 2)
+    # New logic requested:
+    # 4.3% chance over $1000
+    # Golden spot (50-700) is most common
+    roll = random.random()
+    
+    if roll < 0.043:                    # 4.3% chance high balance
+        bal = round(random.uniform(1000, 12500), 2)
+    elif roll < 0.75:                   # ~70.7% chance in golden range 50-700
+        bal = round(random.uniform(50, 700), 2)
+    else:                               # Remaining ~25% in 701-999
+        bal = round(random.uniform(701, 999), 2)
+    
     label = "Available Credit" if is_credit else "Balance"
     return bal, label
 
@@ -141,13 +147,7 @@ def parse_card(line: str) -> Optional[dict]:
 
 def format_card(card: dict, is_tester: bool = False) -> str:
     bin6 = card["card"][:6]
-    
-    # FORCE VR - NOW GUARANTEED
-    if bin6 in BIN_FORCE_VR:
-        vr = BIN_FORCE_VR[bin6]
-    else:
-        vr = random.randint(78, 97)
-    
+    vr = BIN_FORCE_VR.get(bin6, random.randint(78, 97))
     balance, label = generate_balance(card.get("type") == "CREDIT")
 
     lines = [
@@ -223,7 +223,47 @@ def get_session(uid: int) -> dict:
         }
     return user_sessions[uid]
 
-# ===================== COMMANDS =====================
+# ===================== REAL API FUNCTIONS =====================
+async def submit_batch(cards: List[str]) -> Optional[str]:
+    if not API_KEY:
+        logger.error("STORM_API_KEY not set!")
+        return None
+    url = f"{API_BASE}/check"
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    payload = {"cards": cards}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(url, json=payload, headers=headers, timeout=30.0)
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("data", {}).get("batch_id")
+        except Exception as e:
+            logger.error(f"Submit batch failed: {e}")
+            return None
+
+async def poll_batch(batch_id: str):
+    if not batch_id: return
+    url = f"{API_BASE}/check/{batch_id}"
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+
+    async with httpx.AsyncClient() as client:
+        for _ in range(60):   # Max ~3 minutes polling
+            try:
+                resp = await client.get(url, headers=headers, timeout=15.0)
+                data = resp.json()
+                if not data.get("data", {}).get("is_checking", True):
+                    logger.info(f"Batch {batch_id} completed.")
+                    return
+                await asyncio.sleep(3.0)
+            except:
+                await asyncio.sleep(3.0)
+
+# ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ Access Denied.")
@@ -237,7 +277,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_sessions.pop(update.effective_user.id, None)
     await update.message.reply_text("✅ Returned to FactoryVHQ Admin Panel.", reply_markup=main_menu())
 
-# ===================== BUTTON HANDLER =====================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -256,21 +295,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Session cancelled.", reply_markup=main_menu())
         return
 
-    if action == "check":
-        await check_handler(update, context)
-        return
-    if action == "send_file":
-        await send_file_handler(update, context)
-        return
-    if action == "remove_cards":
-        await remove_cards_handler(update, context)
-        return
-    if action == "set_filename":
-        await set_filename_handler(update, context)
-        return
-    if action == "add_more":
-        session["step"] = "waiting_cards"
-        await query.edit_message_text("Please send more cards or drop another .txt file.")
+    if action in ["check", "send_file", "remove_cards", "set_filename", "add_more"]:
+        if action == "check": await check_handler(update, context)
+        elif action == "send_file": await send_file_handler(update, context)
+        elif action == "remove_cards": await remove_cards_handler(update, context)
+        elif action == "set_filename": await set_filename_handler(update, context)
+        elif action == "add_more":
+            session["step"] = "waiting_cards"
+            await query.edit_message_text("Please send more cards or drop another .txt file.")
         return
 
     if action == "rate":
@@ -283,7 +315,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Send 6-digit BIN:")
         return
 
-    # Start new mode
     session["mode"] = action
     session["cards"] = []
     session["filename"] = None
@@ -318,7 +349,6 @@ Cards Checked    : {s['total_cards_checked']}
 """
         await query.edit_message_text(text, parse_mode='HTML', reply_markup=main_menu())
 
-# ===================== MESSAGE HANDLER =====================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
@@ -358,20 +388,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if session.get("step") == "waiting_value":
         action = session.get("rate_action")
         bin6 = session.get("current_bin")
-        if not bin6:
-            await update.message.reply_text("❌ No BIN selected.")
-            return
-
         if action == "force_vr":
             if text.upper() == "RESET":
                 BIN_FORCE_VR.pop(bin6, None)
-                await update.message.reply_text(f"✅ Force VR for BIN {bin6} has been reset.")
+                await update.message.reply_text(f"✅ Force VR for BIN {bin6} reset.")
             else:
                 try:
                     BIN_FORCE_VR[bin6] = int(text)
-                    await update.message.reply_text(f"✅ Force VR for BIN {bin6} successfully set to {text}%")
+                    await update.message.reply_text(f"✅ Force VR for BIN {bin6} set to {text}%")
                 except:
-                    await update.message.reply_text("❌ Please send a number or 'RESET'.")
+                    await update.message.reply_text("Please send a number or RESET.")
         else:
             try:
                 val = int(text)
@@ -381,7 +407,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     BIN_DATABASE[bin6]["balance_rating"] = val
                 elif action == "set_suggestion":
                     BIN_DATABASE[bin6]["suggestion"] = text
-                await update.message.reply_text("✅ BIN updated successfully!")
+                await update.message.reply_text("✅ BIN updated!")
             except:
                 await update.message.reply_text("❌ Invalid input.")
         session["step"] = "idle"
@@ -421,7 +447,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("⚠️ No valid cards detected.")
 
-# ===================== SUMMARY =====================
 async def show_pre_summary(update: Update, session: dict, uid: int):
     total = len(session["cards"])
     usa = sum(1 for c in session["cards"] if c.get("country","US").upper() == "US")
@@ -451,8 +476,15 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Please wait up to 30 seconds while we begin quality checking..."
     )
 
-    # NO API CALL - FULLY BYPASSED (as requested)
-    await asyncio.sleep(2.0)
+    card_strings = [f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}|{c['name']}|{c['address']}|{c['city']}|{c['state']}|{c['zip']}|{c['country']}" for c in session["cards"]]
+
+    if not TEST_MODE:
+        batch_id = await submit_batch(card_strings)
+        if batch_id:
+            await poll_batch(batch_id)
+    else:
+        await asyncio.sleep(2.0)
+
     session["in_post_summary"] = True
     get_stats(uid)["total_cards_checked"] += len(session["cards"])
     await show_post_summary(query, session, uid)
@@ -588,7 +620,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v12.5 - Force VR Fixed + No API Calls")
+    print("🚀 FactoryVHQ v12.7 - Balance Logic Updated (4.3% >1k, Golden 50-700)")
     print(f"   Admins: {len(ADMIN_IDS)} | Test Mode: {TEST_MODE}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
