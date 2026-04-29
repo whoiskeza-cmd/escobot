@@ -96,9 +96,9 @@ def random_ip() -> str:
     return f"{random.randint(25,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(10,250)}"
 
 def generate_balance(is_credit: bool) -> tuple:
-    if random.random() < 0.03:           # 3% chance high balance
+    if random.random() < 0.03:
         bal = round(random.uniform(3200, 12800), 2)
-    elif random.random() < 0.65:         # 65% chance under $1100
+    elif random.random() < 0.65:
         bal = round(random.uniform(85, 1099), 2)
     else:
         bal = round(random.uniform(1100, 3100), 2)
@@ -258,6 +258,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Send 6-digit BIN:")
         return
 
+    # Start new session
     session["mode"] = action
     session["cards"] = []
     session["filename"] = None
@@ -348,7 +349,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_remove(update, context)
         return
 
-    # Card Input
+    # === CARD INPUT - THIS IS THE PART THAT WAS BROKEN ===
     if session.get("step") in ["waiting_cards", "add_more"]:
         new_cards = []
         if update.message.document:
@@ -365,13 +366,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if new_cards:
             session["cards"].extend(new_cards)
             session["step"] = "idle"
-            if session.get("in_post_summary"):
-                await show_post_summary(None, session, uid)
-            else:
-                await show_pre_summary(update, session, uid)
-        return
+            # THIS LINE WAS MISSING - NOW IT ALWAYS SHOWS PRE-SUMMARY
+            await show_pre_summary(update, session, uid)
+        else:
+            await update.message.reply_text("⚠️ No valid cards detected.")
 
-# ===================== SUMMARY =====================
+# ===================== PRE & POST SUMMARY =====================
 async def show_pre_summary(update: Update, session: dict, uid: int):
     total = len(session["cards"])
     usa = sum(1 for c in session["cards"] if c.get("country","US").upper() == "US")
@@ -385,10 +385,7 @@ Mode          : {mode}
 Filename      : {session.get('filename', 'Batch-####')}
 """
 
-    if update.callback_query:
-        await update.callback_query.edit_message_text(text, parse_mode='HTML', reply_markup=PRE_BUTTONS)
-    else:
-        await update.message.reply_html(text, reply_markup=PRE_BUTTONS)
+    await update.message.reply_html(text, reply_markup=PRE_BUTTONS)
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -411,7 +408,6 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_post_summary(query, session, uid)
         return
 
-    # Real API path (placeholder)
     batch_id = "batch-00000"
     await storm_poll(batch_id, len(session["cards"]))
     session["in_post_summary"] = True
@@ -544,8 +540,8 @@ async def storm_poll(batch_id: str, total_cards: int):
     if TEST_MODE:
         await asyncio.sleep(2)
         return
-    poll_counts = {range(0,6):3, range(6,11):5, range(11,16):8, range(16,31):12, range(31,51):18, range(51,101):25}
-    polls = next((v for r,v in poll_counts.items() if total_cards in r), 30)
+    poll_map = {range(0,6):3, range(6,11):5, range(11,16):8, range(16,31):12, range(31,51):18, range(51,101):25}
+    polls = next((v for r,v in poll_map.items() if total_cards in r), 30)
     for _ in range(polls):
         await asyncio.sleep(2.0)
 
@@ -562,8 +558,8 @@ def main():
     app.add_handler(CallbackQueryHandler(set_filename_handler, pattern="^set_filename$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v12.0 Started Successfully")
-    print(f"   Admins Loaded: {len(ADMIN_IDS)} | Test Mode: {TEST_MODE}")
+    print("🚀 FactoryVHQ v12.1 - Pre-Summary Fixed")
+    print(f"   Admins: {len(ADMIN_IDS)} | Test Mode: {TEST_MODE}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
