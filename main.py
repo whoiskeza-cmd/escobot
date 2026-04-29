@@ -8,23 +8,36 @@ import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-# ================= RAILWAY ENVIRONMENT VARIABLES =================
+# ================= LOAD ENVIRONMENT VARIABLES SAFELY =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 STORM_API_KEY = os.getenv("STORM_API_KEY")
-OWNER_ID = int(os.getenv("USER_ID"))
+USER_ID_STR = os.getenv("USER_ID")
+
+# Safety checks
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN is not set in Railway variables!")
+if not STORM_API_KEY:
+    raise ValueError("❌ STORM_API_KEY is not set in Railway variables!")
+if not USER_ID_STR:
+    raise ValueError("❌ USER_ID is not set in Railway variables! Please add your Telegram numeric ID.")
+
+try:
+    OWNER_ID = int(USER_ID_STR)
+except ValueError:
+    raise ValueError("❌ USER_ID must be a numeric value (your Telegram ID)")
 
 API_BASE = "https://api.storm.gift/api/v1"
 
-if not BOT_TOKEN or not STORM_API_KEY or not OWNER_ID:
-    raise ValueError("BOT_TOKEN, STORM_API_KEY, and USER_ID must be set in Railway variables.")
+print(f"✅ Bot starting for OWNER_ID: {OWNER_ID}")
+print(f"🔧 Test Mode: {'ENABLED' if 'TEST_MODE' in os.environ else 'DISABLED (use /testmode)'}")
 
 # ===================== GLOBAL SETTINGS =====================
-TEST_MODE = False  # Toggle with /testmode command
+TEST_MODE = False
 
 stats = {
     "cards_sold": 0, "total_sales": 0, "revenue": 0.0,
     "testers_given": 0, "replacements_given": 0, "profit": 0.0,
-    "card_cost": 1.40, "sale_price": 5.00
+    "card_cost": 2.50, "sale_price": 15.00
 }
 
 BIN_DATA: Dict[str, dict] = {
@@ -81,7 +94,7 @@ def parse_card(line: str) -> dict:
             "bin_rating": info.get("vr", 75), "suggestion": info.get("suggestion", "Retail"),
             "last4": card[-4:]
         }
-    except:
+    except Exception:
         return None
 
 def format_live_card(card: dict, is_tester: bool = False) -> str:
@@ -127,7 +140,7 @@ async def submit_batch(cards: List[str]) -> str:
 async def poll_batch(batch_id: str, max_polls: int) -> int:
     if TEST_MODE:
         await asyncio.sleep(3)
-        return len(batch_id.split("-"))  # Simulate all cards as LIVE in test mode
+        return max_polls * 2
     headers = {"Authorization": f"Bearer {STORM_API_KEY}"}
     for _ in range(max_polls):
         async with aiohttp.ClientSession() as session:
@@ -151,7 +164,7 @@ def main_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(status, callback_data="toggle_test")]
     ])
 
-# ===================== COMMAND HANDLERS =====================
+# ===================== COMMANDS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Access Denied.")
@@ -166,7 +179,7 @@ async def toggle_test_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     global TEST_MODE
     TEST_MODE = not TEST_MODE
-    status = "ENABLED (All cards will be marked LIVE)" if TEST_MODE else "DISABLED (Real API will be used)"
+    status = "ENABLED (All cards marked LIVE - No API used)" if TEST_MODE else "DISABLED (Real Storm API will be used)"
     await update.message.reply_text(f"🔧 Test Mode is now **{status}**", parse_mode='HTML')
     await start(update, context)
 
@@ -245,12 +258,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = session["mode"]
 
-    # Set Filename
     if session.get("mode") == "set_filename":
         session["filename"] = text.strip()
         await update.message.reply_text(f"✅ Filename set to: **{session['filename']}**", parse_mode='HTML')
         session["mode"] = session.get("previous_mode", "format")
-        # Re-show summary
         total = len(session.get("cards", []))
         usa = sum(1 for c in session.get("cards", []) if c.get("country", "US").upper() == "US")
         foreign = total - usa
@@ -273,7 +284,6 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         await update.message.reply_text(pre_text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Remove Cards by Last 4
     if any(x.isdigit() and len(x.strip()) == 4 for x in text.replace(" ", "").split(",")):
         to_remove = {x.strip() for x in text.split(",") if x.strip().isdigit() and len(x.strip()) == 4}
         original = len(session.get("cards", []))
@@ -281,7 +291,6 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         removed = original - len(session.get("cards", []))
         await update.message.reply_text(f"✅ Removed {removed} card(s).")
 
-    # Rate BIN logic
     if mode in ["set_vr", "rate_bin", "set_balance", "bin_suggestion"] and not session.get("bin"):
         bin6 = text[:6]
         if bin6.isdigit():
@@ -315,7 +324,6 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         await update.message.reply_text("✅ Rating updated. Returning to Admin Panel.", reply_markup=main_menu())
         return
 
-    # Normal sequential input for Sale / Replace / Tester
     if mode == "sale" and not session.get("customer"):
         session["customer"] = text
         await update.message.reply_text("How many cards is this customer purchasing?")
@@ -339,7 +347,6 @@ Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}
         await update.message.reply_text("Send cards or drop a .txt file to continue.")
         return
 
-    # Parse incoming cards
     new_cards = []
     if update.message.document:
         file = await update.message.document.get_file()
@@ -390,7 +397,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     polls = 3 if count <= 5 else 5 if count <= 10 else 8 if count <= 15 else (count // 2) + 3
     await query.edit_message_text(f"Batch Has Successfully Been Submitted (ID: {batch_id})\n\nPlease wait up to 30 seconds while we begin quality checking...")
 
-    live_count = await poll_batch(batch_id, polls) if not TEST_MODE else count   # All cards LIVE in test mode
+    live_count = await poll_batch(batch_id, polls)
     dead_count = count - live_count
     live_rate = round((live_count / count * 100), 1) if count > 0 else 0.0
     extras = max(0, live_count - session.get("target", 0))
@@ -404,7 +411,7 @@ LiveRate: {live_rate}%
 Target Reached: {target_reached}
 Extras: {extras}
 Customer: {session.get('customer', 'N/A')}
-Test Mode: {'ON (Simulated)' if TEST_MODE else 'OFF'}
+Test Mode: {'ON (Simulated - All LIVE)' if TEST_MODE else 'OFF'}
 """
 
     keyboard = [
@@ -417,7 +424,6 @@ Test Mode: {'ON (Simulated)' if TEST_MODE else 'OFF'}
 
     await query.edit_message_text(post_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # Update stats
     mode = session.get("mode")
     if mode == "sale":
         stats["cards_sold"] += live_count
@@ -439,10 +445,10 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not session: return
 
     is_tester = session.get("mode") == "tester"
-    content = "\n\n".join(format_live_card(c, is_tester) for c in session["cards"])
-    
+    content = "\n\n".join(format_live_card(c, is_tester) for c in session.get("cards", []))
+
     filename_base = session.get("filename") or f"Batch-{random.randint(1000,9999)}"
-    final_filename = f"{filename_base}-{len(session['cards'])}-{random.randint(1000,9999)}.txt"
+    final_filename = f"{filename_base}-{len(session.get('cards', []))}-{random.randint(1000,9999)}.txt"
 
     await query.message.reply_document(document=bytes(content, "utf-8"), filename=final_filename)
     await query.edit_message_text("✅ File sent successfully.")
@@ -459,7 +465,7 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_handler, pattern="^send_file$"))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("E$CO Admin Panel Bot Started | /testmode enabled | Full Feature Set")
+    print("🚀 E$CO Admin Panel Bot Started Successfully")
     app.run_polling()
 
 if __name__ == "__main__":
