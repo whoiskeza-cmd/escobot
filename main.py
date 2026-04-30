@@ -96,18 +96,13 @@ def random_ip() -> str:
     return f"{random.randint(25,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(10,250)}"
 
 def generate_balance(is_credit: bool) -> tuple:
-    # New logic requested:
-    # 4.3% chance over $1000
-    # Golden spot (50-700) is most common
     roll = random.random()
-    
-    if roll < 0.043:                    # 4.3% chance high balance
+    if roll < 0.043:                    # 4.3% chance over $1000
         bal = round(random.uniform(1000, 12500), 2)
     elif roll < 0.75:                   # ~70.7% chance in golden range 50-700
         bal = round(random.uniform(50, 700), 2)
     else:                               # Remaining ~25% in 701-999
         bal = round(random.uniform(701, 999), 2)
-    
     label = "Available Credit" if is_credit else "Balance"
     return bal, label
 
@@ -241,27 +236,37 @@ async def submit_batch(cards: List[str]) -> Optional[str]:
             resp = await client.post(url, json=payload, headers=headers, timeout=30.0)
             resp.raise_for_status()
             data = resp.json()
-            return data.get("data", {}).get("batch_id")
+            batch_id = data.get("data", {}).get("batch_id")
+            logger.info(f"Batch submitted successfully. Batch ID: {batch_id}")
+            return batch_id
         except Exception as e:
             logger.error(f"Submit batch failed: {e}")
             return None
 
 async def poll_batch(batch_id: str):
-    if not batch_id: return
+    if not batch_id: 
+        logger.warning("No batch_id to poll")
+        return
     url = f"{API_BASE}/check/{batch_id}"
     headers = {"Authorization": f"Bearer {API_KEY}"}
 
+    logger.info(f"Starting polling for batch {batch_id}")
     async with httpx.AsyncClient() as client:
-        for _ in range(60):   # Max ~3 minutes polling
+        for i in range(40):  # Increased polling attempts
             try:
-                resp = await client.get(url, headers=headers, timeout=15.0)
-                data = resp.json()
-                if not data.get("data", {}).get("is_checking", True):
-                    logger.info(f"Batch {batch_id} completed.")
-                    return
-                await asyncio.sleep(3.0)
-            except:
-                await asyncio.sleep(3.0)
+                resp = await client.get(url, headers=headers, timeout=20.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    is_checking = data.get("data", {}).get("is_checking", True)
+                    logger.info(f"Poll {i+1}: is_checking = {is_checking}")
+                    if not is_checking:
+                        logger.info(f"Batch {batch_id} completed!")
+                        return
+                await asyncio.sleep(4.0)  # Poll every 4 seconds
+            except Exception as e:
+                logger.error(f"Poll error: {e}")
+                await asyncio.sleep(4.0)
+    logger.info(f"Polling finished for batch {batch_id} (timeout)")
 
 # ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -295,14 +300,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Session cancelled.", reply_markup=main_menu())
         return
 
-    if action in ["check", "send_file", "remove_cards", "set_filename", "add_more"]:
-        if action == "check": await check_handler(update, context)
-        elif action == "send_file": await send_file_handler(update, context)
-        elif action == "remove_cards": await remove_cards_handler(update, context)
-        elif action == "set_filename": await set_filename_handler(update, context)
-        elif action == "add_more":
-            session["step"] = "waiting_cards"
-            await query.edit_message_text("Please send more cards or drop another .txt file.")
+    if action == "check":
+        await check_handler(update, context)
+        return
+    if action == "send_file":
+        await send_file_handler(update, context)
+        return
+    if action == "remove_cards":
+        await remove_cards_handler(update, context)
+        return
+    if action == "set_filename":
+        await set_filename_handler(update, context)
+        return
+    if action == "add_more":
+        session["step"] = "waiting_cards"
+        await query.edit_message_text("Please send more cards or drop another .txt file.")
         return
 
     if action == "rate":
@@ -478,12 +490,18 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     card_strings = [f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}|{c['name']}|{c['address']}|{c['city']}|{c['state']}|{c['zip']}|{c['country']}" for c in session["cards"]]
 
-    if not TEST_MODE:
+    if TEST_MODE:
+        logger.info("TEST_MODE enabled - skipping API")
+        await asyncio.sleep(2.0)
+    else:
+        logger.info("Using REAL Storm API - submitting batch...")
         batch_id = await submit_batch(card_strings)
         if batch_id:
+            logger.info(f"Polling started for batch: {batch_id}")
             await poll_batch(batch_id)
-    else:
-        await asyncio.sleep(2.0)
+        else:
+            logger.error("Failed to get batch_id - falling back to instant summary")
+            await asyncio.sleep(3.0)
 
     session["in_post_summary"] = True
     get_stats(uid)["total_cards_checked"] += len(session["cards"])
@@ -620,7 +638,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v12.7 - Balance Logic Updated (4.3% >1k, Golden 50-700)")
+    print("🚀 FactoryVHQ v12.8 - Real API Polling Fixed")
     print(f"   Admins: {len(ADMIN_IDS)} | Test Mode: {TEST_MODE}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
