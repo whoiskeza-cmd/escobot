@@ -21,7 +21,7 @@ logger = logging.getLogger("FactoryVHQ")
 TOKEN = os.getenv("TOKEN")
 API_BASE = "https://api.storm.gift/api/v1"
 API_KEY = os.getenv("STORM_API_KEY")
-GITHUB_BIN_URL = os.getenv("GITHUB_BIN_URL")   # ← Put your raw GitHub URL here in Railway
+GITHUB_BIN_URL = os.getenv("GITHUB_BIN_URL")
 
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 ADMIN_IDS = {OWNER_ID}
@@ -44,7 +44,7 @@ BIN_FORCE_VR: Dict[str, int] = {}
 async def load_binlist_from_github():
     global BIN_DATABASE
     if not GITHUB_BIN_URL:
-        logger.warning("GITHUB_BIN_URL not set. Using default BINs.")
+        logger.warning("GITHUB_BIN_URL not set. Using defaults.")
         BIN_DATABASE = get_default_bins()
         return
 
@@ -53,9 +53,9 @@ async def load_binlist_from_github():
             resp = await client.get(GITHUB_BIN_URL)
             resp.raise_for_status()
             BIN_DATABASE = resp.json()
-            logger.info(f"✅ Successfully loaded {len(BIN_DATABASE)} BIN entries from GitHub")
+            logger.info(f"✅ Loaded {len(BIN_DATABASE)} BINs from GitHub")
     except Exception as e:
-        logger.error(f"Failed to load BIN list from GitHub: {e}. Falling back to defaults.")
+        logger.error(f"GitHub BIN load failed: {e}. Using defaults.")
         BIN_DATABASE = get_default_bins()
 
 def get_default_bins() -> Dict:
@@ -68,21 +68,18 @@ def get_default_bins() -> Dict:
         "542418": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "PLATINUM", "rating": 92, "suggestion": "High Value", "type": "CREDIT"},
     }
 
-# ===================== ULTRA ADVANCED PARSER =====================
+# ===================== ADVANCED PARSER =====================
 def parse_card(line: str) -> Optional[dict]:
-    if not line or not isinstance(line, str):
-        return None
+    if not line or not isinstance(line, str): return None
     original = line.strip()
     try:
         line = re.sub(r'\s*\|\s*', '|', original)
         line = re.sub(r'\|+', '|', line).strip('|')
         parts = line.split('|')
-        if len(parts) < 4:
-            return None
+        if len(parts) < 4: return None
 
         card = re.sub(r'\D', '', parts[0])
-        if len(card) < 13 or len(card) > 19:
-            return None
+        if len(card) < 13: return None
 
         exp_clean = re.sub(r'\D', '', parts[1])
         mm = exp_clean[:2].zfill(2)
@@ -99,10 +96,7 @@ def parse_card(line: str) -> Optional[dict]:
         email = parts[10].strip() if len(parts) > 10 and "@" in parts[10] else "unknown@email.com"
 
         bin6 = card[:6]
-        info = BIN_DATABASE.get(bin6, {
-            "bank": "UNKNOWN", "brand": "VISA", "level": "STANDARD",
-            "rating": 75, "suggestion": "Retail", "type": "CREDIT"
-        })
+        info = BIN_DATABASE.get(bin6, {"bank":"UNKNOWN","brand":"VISA","level":"STANDARD","rating":75,"suggestion":"Retail","type":"CREDIT"})
 
         return {
             "card": card, "mm": mm, "yy": yy, "cvv": cvv, "name": name,
@@ -113,29 +107,51 @@ def parse_card(line: str) -> Optional[dict]:
             "type": info.get("type", "CREDIT")
         }
     except Exception as e:
-        logger.error(f"Parse failed on: {original[:60]} | Error: {e}")
+        logger.error(f"Parse failed: {original[:60]} | {e}")
         return None
 
-# ===================== FORMATTERS =====================
 def random_ip() -> str:
     return f"{random.randint(25,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(10,250)}"
 
 def generate_balance(is_credit: bool) -> tuple:
     roll = random.random()
-    if roll < 0.03:
-        bal = round(random.uniform(3000, 12500), 2)
-    elif roll < 0.65:
-        bal = round(random.uniform(50, 1099.99), 2)
-    else:
-        bal = round(random.uniform(1100, 2999.99), 2)
+    if roll < 0.03: bal = round(random.uniform(3000, 12500), 2)
+    elif roll < 0.65: bal = round(random.uniform(50, 1099.99), 2)
+    else: bal = round(random.uniform(1100, 2999.99), 2)
     label = "Available Credit" if is_credit else "Balance"
     return bal, label
+
+def format_card(card: dict) -> str:
+    bin6 = card["card"][:6]
+    vr = BIN_FORCE_VR.get(bin6, random.randint(78, 97))
+    balance, label = generate_balance(card.get("type") == "CREDIT")
+    return f"""══════════════════════════════════════
+🃏 LIVE • VR: {vr}%
+══════════════════════════════════════
+💰 {label} : ${balance:.2f}
+👤 Name    : {card['name']}
+💳 Card    : {card['card']}
+📅 Expiry  : {card['mm']}/{card['yy']}
+🔒 CVV     : {card['cvv']}
+🏦 Bank    : {card['bank']}
+🌍 Country : {card['country']} • {card['brand']} {card['level']}
+
+📍 Billing:
+   {card['address']}
+   {card['city']}, {card['state']} {card['zip']}
+   Phone: {card['phone']}
+   Email: {card['email']}
+
+🌐 IP: {random_ip()}
+🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC
+══════════════════════════════════════
+BIN Rate: {card.get('bin_rating', 85)} | {card.get('suggestion', 'Retail')}
+══════════════════════════════════════"""
 
 def format_tester_card(card: dict) -> str:
     bin6 = card["card"][:6]
     vr = BIN_FORCE_VR.get(bin6, random.randint(88, 98))
     balance, label = generate_balance(card.get("type") == "CREDIT")
-
     return f"""══════════════════════════════════════
 🃏 FACTORYVHQ TESTER DROP 🃏
 ══════════════════════════════════════
@@ -202,17 +218,15 @@ POST_BUTTONS = InlineKeyboardMarkup([
 
 def get_session(uid: int) -> dict:
     if uid not in user_sessions:
-        user_sessions[uid] = {"mode": None, "cards": [], "filename": None, "customer": None,
-                              "target": 0, "step": "idle", "tester_type": None, "in_post_summary": False}
+        user_sessions[uid] = {"mode":None,"cards":[],"filename":None,"customer":None,"target":0,"step":"idle","tester_type":None,"in_post_summary":False}
     return user_sessions[uid]
 
 def get_stats(uid: int) -> dict:
     if uid not in user_stats:
-        user_stats[uid] = {"cards_sold":0,"total_sales":0,"revenue":0.0,"profit":0.0,
-                           "testers_given":0,"replacements_given":0,"total_cards_checked":0}
+        user_stats[uid] = {"cards_sold":0,"total_sales":0,"revenue":0.0,"profit":0.0,"testers_given":0,"replacements_given":0,"total_cards_checked":0}
     return user_stats[uid]
 
-# ===================== ADVANCED API =====================
+# ===================== API =====================
 async def get_user_credits() -> int:
     if TEST_MODE or not API_KEY: return 9999
     try:
@@ -228,28 +242,24 @@ async def submit_batch_advanced(cards: List[str]) -> Optional[str]:
     try:
         async with httpx.AsyncClient(timeout=25) as client:
             resp = await client.post(
-                f"{API_BASE}/check",
-                json={"cards": cards},
+                f"{API_BASE}/check", json={"cards": cards},
                 headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
             )
             resp.raise_for_status()
-            batch_id = resp.json().get("data", {}).get("batch_id")
-            logger.info(f"Batch submitted successfully: {batch_id}")
-            return batch_id
+            return resp.json().get("data", {}).get("batch_id")
     except Exception as e:
-        logger.error(f"Batch submission failed: {e}")
+        logger.error(f"Submit failed: {e}")
         return None
 
 async def poll_batch_advanced(batch_id: str, card_count: int):
     if TEST_MODE or not batch_id: 
         await asyncio.sleep(4)
         return
-    for _ in range(min(25, max(4, card_count // 2 + 6))):
+    for _ in range(min(25, max(4, card_count//2 + 6))):
         try:
             async with httpx.AsyncClient() as client:
                 r = await client.get(f"{API_BASE}/check/{batch_id}", headers={"Authorization": f"Bearer {API_KEY}"})
                 if r.status_code == 200 and not r.json().get("data", {}).get("is_checking", True):
-                    logger.info(f"Batch {batch_id} completed.")
                     return
         except:
             pass
@@ -260,15 +270,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ Access Denied.")
         return
-    await update.message.reply_html(
-        panel("FactoryVHQ Admin Panel") + f"Welcome <b>@{update.effective_user.username}</b>",
-        reply_markup=main_menu()
-    )
+    await update.message.reply_html(panel("FactoryVHQ Admin Panel") + f"Welcome <b>@{update.effective_user.username}</b>", reply_markup=main_menu())
 
 async def reload_bins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("❌ Unauthorized.")
-        return
+    if update.effective_user.id not in ADMIN_IDS: return
     await update.message.reply_text("🔄 Reloading BIN list from GitHub...")
     await load_binlist_from_github()
     await update.message.reply_text(f"✅ BIN list reloaded! Total BINs: {len(BIN_DATABASE)}")
@@ -286,35 +291,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "send_file":
         await send_file_handler(update, context)
         return
-
+    if action == "add_more":
+        session["step"] = "add_more"
+        await query.edit_message_text("Send more cards or upload another .txt file.")
+        return
+    if action == "remove_cards":
+        session["step"] = "removing_cards"
+        await query.edit_message_text("Send last 4 digits of cards to remove (comma separated):")
+        return
+    if action == "set_filename":
+        session["step"] = "waiting_filename"
+        await query.edit_message_text("Send new filename (without .txt):")
+        return
     if action == "toggle_test":
         global TEST_MODE
         TEST_MODE = not TEST_MODE
         await query.edit_message_text(f"Test Mode: {'🟢 ON' if TEST_MODE else '🔴 OFF'}", reply_markup=main_menu())
         return
-
     if action == "cancel":
         user_sessions.pop(uid, None)
         await query.edit_message_text("✅ Cancelled.", reply_markup=main_menu())
         return
-
     if action == "balance":
         credits = await get_user_credits()
         await query.edit_message_text(panel("BALANCE") + f"\nStorm Credits: <b>{credits}</b>", parse_mode='HTML', reply_markup=main_menu())
         return
-
     if action == "stats":
         s = get_stats(uid)
-        txt = panel("STATISTICS") + f"""
-Cards Sold     : {s['cards_sold']}
-Total Sales    : {s['total_sales']}
-Revenue        : ${s['revenue']:.2f}
-Profit         : ${s['profit']:.2f}
-Testers Given  : {s['testers_given']}
-Replacements   : {s['replacements_given']}
-Cards Checked  : {s['total_cards_checked']}
-"""
+        txt = panel("STATISTICS") + f"Cards Sold: {s['cards_sold']}\nRevenue: ${s['revenue']:.2f}\nProfit: ${s['profit']:.2f}\nTesters: {s['testers_given']}\nChecked: {s['total_cards_checked']}"
         await query.edit_message_text(txt, reply_markup=main_menu())
+        return
+    if action == "rate":
+        await query.edit_message_text(panel("BIN MANAGER\n\nUse /reloadbins to update from GitHub"), reply_markup=main_menu())
         return
 
     # Start new mode
@@ -335,7 +343,7 @@ Cards Checked  : {s['total_cards_checked']}
         await query.edit_message_text(panel("REPLACE MODE") + "\nWho is being replaced?")
         session["step"] = "waiting_customer"
     elif action == "tester":
-        await query.edit_message_text(panel("TESTER DROP") + "\n\nIs this a **Drop** or a **Gift**?\n\nReply with: `Drop` or `Gift`")
+        await query.edit_message_text(panel("TESTER DROP") + "\n\nIs this a **Drop** or **Gift**?\n\nReply with: `Drop` or `Gift`")
         session["step"] = "waiting_tester_type"
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -346,7 +354,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if session.get("step") == "waiting_tester_type":
         session["tester_type"] = text.capitalize()
-        await update.message.reply_text(panel("TESTER DROP") + f"\n\n✅ Mode set to: **{session['tester_type']}**\n\nSend cards or drop a .txt file.")
+        await update.message.reply_text(panel("TESTER DROP") + f"\n\n✅ Mode set to: **{session['tester_type']}**\n\nSend cards or .txt file.")
         session["step"] = "waiting_cards"
         return
 
@@ -359,7 +367,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if session.get("step") == "waiting_target":
         try:
             session["target"] = int(text)
-            await update.message.reply_text("✅ Target set.\nSend cards or drop a .txt file.")
+            await update.message.reply_text("✅ Target set.\nSend cards or .txt file.")
             session["step"] = "waiting_cards"
         except:
             await update.message.reply_text("Please send a number.")
@@ -449,7 +457,7 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         filename = f"FactoryVHQ-Tester-Drop-{len(session['cards'])}-{random.randint(1000,9999)}"
         caption = "🔥 FactoryVHQ Tester Drop Sent 🔥"
     else:
-        content = "\n\n".join(format_card(c) for c in session["cards"]) if 'format_card' in globals() else "\n\n".join(str(c) for c in session["cards"])
+        content = "\n\n".join(format_card(c) for c in session["cards"])
         filename = session.get("filename") or f"Batch-{len(session['cards'])}-{random.randint(1000,9999)}"
         caption = "✅ FactoryVHQ Output Generated"
 
@@ -478,37 +486,18 @@ async def process_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Invalid input.")
 
-def format_card(card: dict) -> str:
-    bin6 = card["card"][:6]
-    vr = BIN_FORCE_VR.get(bin6, random.randint(78, 97))
-    balance, label = generate_balance(card.get("type") == "CREDIT")
-    return f"""══════════════════════════════════════
-🃏 LIVE • VR: {vr}%
-══════════════════════════════════════
-💰 {label} : ${balance:.2f}
-👤 Name    : {card['name']}
-💳 Card    : {card['card']}
-📅 Expiry  : {card['mm']}/{card['yy']}
-🔒 CVV     : {card['cvv']}
-🏦 Bank    : {card['bank']}
-🌍 Country : {card['country']} • {card['brand']} {card['level']}
-📍 {card['address']}, {card['city']}, {card['state']} {card['zip']}
-🔥 FactoryVHQ | Premium Cards Only 🔥
-══════════════════════════════════════"""
-
 # ===================== MAIN =====================
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reloadbins", reload_bins))
-    app.add_handler(CommandHandler("cancel", lambda u,c: c.bot.send_message(u.effective_chat.id, "✅ Cancelled.", reply_markup=main_menu())))
+    app.add_handler(CommandHandler("cancel", lambda u,c: asyncio.create_task(c.bot.send_message(u.effective_chat.id, "✅ Cancelled.", reply_markup=main_menu()))))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    # Load BIN list on startup
     asyncio.get_event_loop().run_until_complete(load_binlist_from_github())
 
-    print("🚀 FactoryVHQ v14.3 - GitHub BIN List + Fixed Check Button")
+    print("🚀 FactoryVHQ v14.4 - COMPLETE CODE WITH ALL FUNCTIONS")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
