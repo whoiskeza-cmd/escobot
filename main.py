@@ -18,7 +18,7 @@ API_BASE = "https://api.storm.gift/api/v1"
 API_KEY = os.getenv("STORM_API_KEY")
 GITHUB_BIN_URL = "https://raw.githubusercontent.com/whoiskeza-cmd/escobot/main/binlist.json"
 
-TEST_MODE = False   # Set to False for real Stormcheck
+TEST_MODE = False
 
 user_sessions: Dict[int, dict] = {}
 BIN_DATABASE: Dict[str, dict] = {}
@@ -41,21 +41,15 @@ async def load_binlist():
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(GITHUB_BIN_URL)
-            if resp.status_code != 200:
-                logger.error(f"GitHub returned {resp.status_code}")
-                BIN_DATABASE = get_default_bins()
-                return
-
             text = resp.text.strip()
-            if text.startswith("<"):
-                logger.warning("Received HTML instead of JSON, using defaults")
+            if resp.status_code != 200 or text.startswith("<"):
+                logger.warning("Using default BIN list")
                 BIN_DATABASE = get_default_bins()
                 return
-
             BIN_DATABASE = json.loads(text)
-            logger.info(f"✅ Successfully loaded {len(BIN_DATABASE)} BINs")
+            logger.info(f"✅ Loaded {len(BIN_DATABASE)} BINs from GitHub")
     except Exception as e:
-        logger.error(f"BIN list failed: {e}")
+        logger.error(f"BIN load failed: {e}")
         BIN_DATABASE = get_default_bins()
 
 def get_default_bins():
@@ -97,8 +91,7 @@ def parse_card(line: str) -> Optional[dict]:
             "level": info["level"], "bin_rating": info.get("rating", 75),
             "suggestion": info.get("suggestion", "Retail"), "type": info.get("type", "CREDIT")
         }
-    except Exception as e:
-        logger.error(f"Parse error: {e}")
+    except Exception:
         return None
 
 def format_card(card: dict) -> str:
@@ -144,11 +137,10 @@ POST_BUTTONS = InlineKeyboardMarkup([
     [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
 ])
 
-# ===================== STORMCHECK FUNCTIONS =====================
+# ===================== STORMCHECK =====================
 async def submit_batch_advanced(cards: List[str]):
     if TEST_MODE:
         return "test-batch-999999"
-
     if not API_KEY:
         return "ERROR: STORM_API_KEY is not set in Railway"
 
@@ -157,46 +149,41 @@ async def submit_batch_advanced(cards: List[str]):
             resp = await client.post(
                 f"{API_BASE}/check",
                 json={"cards": cards},
-                headers={
-                    "Authorization": f"Bearer {API_KEY}",
-                    "Content-Type": "application/json"
-                }
+                headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
             )
-            logger.info(f"Submit Status: {resp.status_code} | Response: {resp.text[:150]}")
-
+            logger.info(f"Stormcheck Submit Status: {resp.status_code}")
             if resp.status_code == 200:
                 data = resp.json()
                 batch_id = data.get("data", {}).get("batch_id")
                 if batch_id:
                     return batch_id
-            return f"ERROR: Status {resp.status_code} - {resp.text[:100]}"
+            return f"ERROR: {resp.status_code} - {resp.text[:100]}"
     except Exception as e:
-        return f"ERROR: Exception - {str(e)}"
+        return f"ERROR: {str(e)}"
 
 async def poll_with_progress(batch_id: str, original_cards: List[dict], message):
-    logger.info(f"Waiting 8 seconds before polling (as requested)")
+    logger.info("Waiting 8 seconds before polling (user requested)")
     await asyncio.sleep(8)
 
     for i, quote in enumerate(QUALITY_QUOTES * 2):
         progress = min(99, (i + 1) * 8)
         await message.edit_text(f"🔄 Quality Checking...\n\n{quote}\n\nProgress: {progress}%")
         await asyncio.sleep(2.5)
-
     return original_cards.copy()
 
-# ===================== CHECK HANDLER =====================
+# ===================== HANDLERS =====================
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid = query.from_user.id
     session = user_sessions.setdefault(uid, {"cards": [], "live_cards": []})
 
-    if not session["cards"]:
-        await query.edit_message_text("❌ No cards found.")
+    if not session.get("cards"):
+        await query.edit_message_text("❌ No cards found. Send cards first.")
         return
 
     msg = await query.edit_message_text("🚀 Submitting batch to Stormcheck...")
 
-    card_strings = [f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}|{c['name']}|{c.get('address','')}|{c.get('city','')}|{c.get('state','')}|{c.get('zip','')}|{c.get('country','US')}" 
+    card_strings = [f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}|{c['name']}|{c.get('address','N/A')}|{c.get('city','N/A')}|{c.get('state','N/A')}|{c.get('zip','N/A')}|{c.get('country','US')}" 
                     for c in session["cards"]]
 
     batch_id = await submit_batch_advanced(card_strings)
@@ -205,7 +192,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ {batch_id}")
         return
 
-    await msg.edit_text("✅ Batch submitted.\nWaiting 8 seconds before starting poll...")
+    await msg.edit_text("✅ Batch submitted.\nWaiting 8 seconds before polling...")
 
     live_cards = await poll_with_progress(batch_id, session["cards"], msg)
     session["live_cards"] = live_cards
@@ -223,7 +210,6 @@ Live Rate   : {round((live/total)*100, 1) if total else 0.0}%
 """
     await message.edit_text(text, parse_mode='HTML', reply_markup=POST_BUTTONS)
 
-# ===================== BASIC HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_html(panel("FactoryVHQ Admin Panel"), reply_markup=main_menu())
 
@@ -246,7 +232,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         TEST_MODE = not TEST_MODE
         await query.edit_message_text(f"Test Mode: {'🟢 ON' if TEST_MODE else '🔴 OFF'}", reply_markup=main_menu())
     else:
-        await query.edit_message_text(f"{action.upper()} MODE\n\nSend cards or .txt file.")
+        await query.edit_message_text(f"{action.upper()} MODE\n\nSend cards or drop a .txt file.")
         session["mode"] = action
         session["cards"] = []
 
@@ -268,7 +254,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if new_cards:
         session["cards"].extend(new_cards)
-        await update.message.reply_text(f"✅ Loaded {len(new_cards)} cards (Total: {len(session['cards'])})\nPress Check button.")
+        await update.message.reply_text(f"✅ Loaded {len(new_cards)} cards (Total: {len(session['cards'])})\nPress the **Check** button.")
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -276,7 +262,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v16.3 - Fixed Event Loop + 8s Delay")
+    print("🚀 FactoryVHQ v16.5 - Event Loop Fixed (Correct Structure)")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
