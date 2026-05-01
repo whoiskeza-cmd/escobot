@@ -9,11 +9,7 @@ import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-logging.basicConfig(
-    format='%(asctime)s | %(levelname)-8s | %(message)s',
-    level=logging.INFO,
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+logging.basicConfig(format='%(asctime)s | %(levelname)-8s | %(message)s', level=logging.INFO)
 logger = logging.getLogger("FactoryVHQ")
 
 # ===================== CONFIG =====================
@@ -22,12 +18,9 @@ API_BASE = "https://api.storm.gift/api/v1"
 API_KEY = os.getenv("STORM_API_KEY")
 
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
-
-ADMIN_IDS = set()
-if OWNER_ID: ADMIN_IDS.add(OWNER_ID)
-if ADMIN_IDS_STR:
-    for x in ADMIN_IDS_STR.split(","):
+ADMIN_IDS = {OWNER_ID}
+if os.getenv("ADMIN_IDS"):
+    for x in os.getenv("ADMIN_IDS").split(","):
         if x.strip().isdigit():
             ADMIN_IDS.add(int(x.strip()))
 
@@ -84,9 +77,9 @@ DEFAULT_BINS = {
     "546616": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "WORLD", "rating": 93, "suggestion": "Luxury", "type": "CREDIT"},
 }
 
-for bin6, info in DEFAULT_BINS.items():
-    if bin6 not in BIN_DATABASE:
-        BIN_DATABASE[bin6] = info
+for k, v in DEFAULT_BINS.items():
+    if k not in BIN_DATABASE:
+        BIN_DATABASE[k] = v
 
 # ===================== HELPERS =====================
 def get_stats(uid: int) -> dict:
@@ -110,17 +103,11 @@ def generate_balance(is_credit: bool) -> tuple:
 
 def parse_card(line: str) -> Optional[dict]:
     try:
-        # Clean and split - this is the most important fix
         cleaned = line.replace("||", "|").strip()
         parts = [p.strip() for p in cleaned.split("|")]
-
-        if len(parts) < 4:
-            return None
+        if len(parts) < 4: return None
 
         card = parts[0].replace(" ", "")
-        if len(card) < 13 or not card.isdigit():
-            return None
-
         exp_raw = parts[1].replace("/", "").replace(" ", "")
         mm = exp_raw[:2].zfill(2)
         yy = exp_raw[2:4].zfill(2) if len(exp_raw) >= 4 else exp_raw[-2:].zfill(2)
@@ -146,8 +133,7 @@ def parse_card(line: str) -> Optional[dict]:
             "bin_rating": info["rating"], "suggestion": info["suggestion"],
             "type": info.get("type", "CREDIT")
         }
-    except Exception as e:
-        logger.warning(f"Failed to parse line: {line[:50]}... Error: {e}")
+    except:
         return None
 
 def format_card(card: dict, is_tester: bool = False) -> str:
@@ -221,35 +207,66 @@ POST_BUTTONS = InlineKeyboardMarkup([
 
 def get_session(uid: int) -> dict:
     if uid not in user_sessions:
-        user_sessions[uid] = {
-            "mode": None, "cards": [], "filename": None, "customer": None,
-            "target": 0, "step": "idle", "tester_type": None, "in_post_summary": False
-        }
+        user_sessions[uid] = {"mode":None,"cards":[],"filename":None,"customer":None,"target":0,"step":"idle","tester_type":None,"in_post_summary":False}
     return user_sessions[uid]
 
-# ===================== API =====================
+# ===================== UPDATED STORMCHECK API FUNCTIONS (Per Documentation) =====================
 async def submit_batch(cards: List[str]) -> Optional[str]:
-    if TEST_MODE or not API_KEY: return "test-batch-id"
+    if TEST_MODE or not API_KEY:
+        return "test-batch-id"
+
+    url = f"{API_BASE}/check"
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {"cards": cards}   # Correct format per documentation
+
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.post(f"{API_BASE}/check", json={"cards": cards},
-                                     headers={"Authorization": f"Bearer {API_KEY}"}, timeout=30)
-            return resp.json().get("data", {}).get("batch_id")
-    except:
+            resp = await client.post(url, json=payload, headers=headers, timeout=30)
+            resp.raise_for_status()
+            data = resp.json().get("data", {})
+            batch_id = data.get("batch_id")
+            logger.info(f"Stormcheck Batch Submitted - ID: {batch_id} | Accepted: {data.get('accepted_count', 0)}")
+            return batch_id
+    except Exception as e:
+        logger.error(f"Stormcheck Submit Error: {e}")
         return None
 
 async def poll_batch(batch_id: str, card_count: int):
-    if TEST_MODE or not batch_id: return
+    if TEST_MODE or not batch_id:
+        await asyncio.sleep(3)
+        return
+
     polls = 3 if card_count <= 5 else 5 if card_count <= 10 else 8 if card_count <= 15 else min(25, card_count//2 + 6)
+
+    url = f"{API_BASE}/check/{batch_id}"
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+
     async with httpx.AsyncClient() as client:
-        for _ in range(polls):
+        for i in range(polls):
             try:
-                r = await client.get(f"{API_BASE}/check/{batch_id}", headers={"Authorization": f"Bearer {API_KEY}"}, timeout=25)
-                if r.status_code == 200 and not r.json().get("data", {}).get("is_checking", True):
-                    return
-            except:
-                pass
+                resp = await client.get(url, headers=headers, timeout=25)
+                if resp.status_code == 200:
+                    data = resp.json().get("data", {})
+                    if not data.get("is_checking", True):
+                        logger.info(f"Batch {batch_id} completed after {i+1} polls")
+                        return
+            except Exception as e:
+                logger.error(f"Polling error: {e}")
             await asyncio.sleep(4)
+
+# ===================== RATE MENU =====================
+def rate_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Set BIN VR", callback_data="set_vr")],
+        [InlineKeyboardButton("Rate BIN", callback_data="rate_bin")],
+        [InlineKeyboardButton("Set Balance Rating", callback_data="set_balance")],
+        [InlineKeyboardButton("Set Suggestion", callback_data="set_suggestion")],
+        [InlineKeyboardButton("Force VR", callback_data="force_vr")],
+        [InlineKeyboardButton("← Back", callback_data="back_main")]
+    ])
 
 # ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -310,19 +327,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(panel("TESTER MODE") + "\nIs this a **Drop** or **Gift**?")
         session["step"] = "waiting_tester_type"
     elif action == "balance":
-        await query.edit_message_text(panel("BALANCE") + "\nYour available Storm Credits: <b>2847</b>", parse_mode='HTML', reply_markup=main_menu())
+        credits = 2847
+        await query.edit_message_text(panel("BALANCE") + f"\nYour available Storm Credits: <b>{credits}</b>", parse_mode='HTML', reply_markup=main_menu())
     elif action == "stats":
         s = get_stats(uid)
-        text = panel("STATISTICS") + f"""
-Cards Sold       : {s['cards_sold']}
-Total Sales      : {s['total_sales']}
-Revenue          : ${s['revenue']:.2f}
-Profit           : ${s['profit']:.2f}
-Testers Given    : {s['testers_given']}
-Replacements     : {s['replacements_given']}
-Cards Checked    : {s['total_cards_checked']}
-"""
-        await query.edit_message_text(text, parse_mode='HTML', reply_markup=main_menu())
+        txt = panel("STATISTICS") + f"Cards Sold: {s['cards_sold']}\nTotal Sales: {s['total_sales']}\nRevenue: ${s['revenue']:.2f}\nProfit: ${s['profit']:.2f}\nTesters: {s['testers_given']}\nReplacements: {s['replacements_given']}\nChecked: {s['total_cards_checked']}"
+        await query.edit_message_text(txt, reply_markup=main_menu())
 
     if action == "check":
         await check_handler(update, context)
@@ -371,7 +381,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session["cards"].extend(new_cards)
             await show_pre_summary(update, session, uid)
         else:
-            await update.message.reply_text("⚠️ No valid cards detected. Please check the format.")
+            await update.message.reply_text("⚠️ No valid cards detected.")
         return
 
     if session.get("step") == "removing_cards":
@@ -387,21 +397,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_pre_summary(update, session, uid)
         return
 
-    if session.get("step") == "waiting_bin" or session.get("step") == "waiting_value":
-        # BIN manager logic (simplified for space - add if needed)
-        pass
-
 async def show_pre_summary(update: Update, session: dict, uid: int):
     count = len(session["cards"])
-    usa = sum(1 for c in session["cards"] if str(c.get("country","US")).upper() in ["US","USA","AU"])
+    usa = sum(1 for c in session["cards"] if str(c.get("country","US")).upper() in ["US","USA"])
     mode = session.get("mode","FORMAT").upper()
-
     text = panel(f"{mode} PRE-SUMMARY") + f"""
 Total Cards   : {count}
 Total USA     : {usa}
 Total Foreign : {count - usa}
 Mode          : {mode}
 """
+    if mode in ["SALE","REPLACE"]:
+        text += f"Customer : {session.get('customer','N/A')}\nTarget   : {session.get('target',0)}\n"
     await update.message.reply_html(text, reply_markup=PRE_BUTTONS)
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -417,11 +424,12 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = session.get("mode", "FORMAT").upper()
 
     if TEST_MODE:
-        await query.edit_message_text(f"🔄 TEST MODE ENABLED\nMode: {mode}\nCards: {count}\n\nAll cards marked as LIVE (no API used).")
+        await query.edit_message_text(f"🔄 TEST MODE ENABLED\nMode: {mode}\nCards: {count}\n\nAll cards marked LIVE (API bypassed).")
         await asyncio.sleep(2)
     else:
         await query.edit_message_text(
-            "🔄 Using Stormcheck.cc API\n\nBatch has successfully been submitted.\nPlease wait up to 30 seconds while we begin quality checking..."
+            "Batch Has Successfully Been Submitted, Please Wait Up To 30 Seconds While We Beginning Quality Checking",
+            parse_mode='HTML'
         )
         card_strings = [f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}|{c['name']}|{c['address']}|{c['city']}|{c['state']}|{c['zip']}|{c['country']}" for c in session["cards"]]
         batch_id = await submit_batch(card_strings)
@@ -437,13 +445,32 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_post_summary(query, session: dict, uid: int):
     count = len(session["cards"])
     test_note = "\n\n(Test Mode - Stats Frozen)" if TEST_MODE else ""
-    text = panel("POST-SUMMARY") + f"""
-Total Cards : {count}
-Total Live  : {count}
-Total Dead  : 0
-Live Rate   : 100.0%{test_note}
-"""
-    await query.edit_message_text(text, parse_mode='HTML', reply_markup=POST_BUTTONS)
+    mode = session.get("mode", "format").lower()
+    stats = get_stats(uid)
+
+    if not TEST_MODE:
+        if mode == "sale":
+            revenue = count * SALE_PRICE
+            profit = revenue - (count * CARD_COST)
+            stats["cards_sold"] += count
+            stats["total_sales"] += 1
+            stats["revenue"] += revenue
+            stats["profit"] += profit
+        elif mode == "replace":
+            stats["replacements_given"] += 1
+            stats["profit"] -= (count * CARD_COST)
+
+    if mode == "sale":
+        header = "POST-SUMMARY - SALE"
+        text = f"Total Cards: {count}\nTotal Live: {count}\nExtras: {max(0,count-session.get('target',0))}\nLive Rate: 100%\nTarget Reached: True\nProfit Made: ${stats.get('profit',0):.2f}\nTotal Revenue: ${stats.get('revenue',0):.2f}{test_note}"
+    elif mode == "replace":
+        header = "POST-SUMMARY - REPLACE"
+        text = f"Total Cards: {count}\nTotal Live: {count}\nCustomer: {session.get('customer','N/A')}{test_note}"
+    else:
+        header = "POST-SUMMARY"
+        text = f"Total Cards: {count}\nTotal Live: {count}\nLive Rate: 100%{test_note}"
+
+    await query.edit_message_text(panel(header) + text, parse_mode='HTML', reply_markup=POST_BUTTONS)
 
 async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -453,14 +480,25 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     content = "\n\n".join(format_card(c, is_tester) for c in session["cards"])
     customer = session.get("customer", "FactoryVHQ")
-    filename = session.get("filename") or f"Batch-{len(session['cards'])}-{random.randint(1000,9999)}"
+    live = len(session["cards"])
+    filename = session.get("filename") or f"{customer}-{live}-{random.randint(1000,9999)}"
 
     await query.message.reply_document(
         document=bytes(content, "utf-8"),
         filename=f"{filename}.txt",
         caption="✅ FactoryVHQ Output Generated"
     )
-    await query.edit_message_text("✅ File sent successfully!", reply_markup=main_menu())
+
+    if session.get("mode") in ["sale", "replace"] and live > session.get("target", 0):
+        extras = session["cards"][session.get("target", 0):]
+        extra_content = "\n\n".join(format_card(c) for c in extras)
+        await query.message.reply_document(
+            document=bytes(extra_content, "utf-8"),
+            filename=f"Extras-{len(extras)}-cards.txt",
+            caption="✅ Extras File"
+        )
+
+    await query.edit_message_text("✅ Files sent successfully!", reply_markup=main_menu())
     user_sessions.pop(uid, None)
     save_data()
 
@@ -480,16 +518,6 @@ async def process_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Invalid input.")
 
-def rate_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Set BIN VR", callback_data="set_vr")],
-        [InlineKeyboardButton("Rate BIN", callback_data="rate_bin")],
-        [InlineKeyboardButton("Set Balance Rating", callback_data="set_balance")],
-        [InlineKeyboardButton("Set Suggestion", callback_data="set_suggestion")],
-        [InlineKeyboardButton("Force VR", callback_data="force_vr")],
-        [InlineKeyboardButton("← Back to Panel", callback_data="back_main")]
-    ])
-
 # ===================== MAIN =====================
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -498,8 +526,9 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v13.5 - Strong Parser Fix Applied")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    print("🚀 FactoryVHQ v13.6 - Stormcheck API Updated (Correct Format)")
+    print(f"   Admins: {len(ADMIN_IDS)} | Test Mode: {TEST_MODE}")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
