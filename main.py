@@ -3,61 +3,59 @@ import os
 import logging
 import asyncio
 import re
-import json
-from typing import Dict, List, Optional
-import httpx
+import requests
+from datetime import datetime
+from typing import List, Dict, Optional
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, 
+    CallbackQueryHandler, ContextTypes, filters
+)
 
 logging.basicConfig(format='%(asctime)s | %(levelname)-8s | %(message)s', level=logging.INFO)
 logger = logging.getLogger("FactoryVHQ")
 
+# ====================== CONFIG (Matched to your bot) ======================
 TOKEN = os.getenv("TOKEN")
-API_BASE = "https://api.storm.gift/api/v1"
-API_KEY = os.getenv("STORM_API_KEY")
-GITHUB_BIN_URL = "https://raw.githubusercontent.com/whoiskeza-cmd/escobot/main/binlist.json"
+BASE_URL = os.getenv("BASE_URL", "https://api.storm.gift/api/v1")
+API_KEY = os.getenv("API_KEY")
+
+HEADERS = {
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json"
+}
 
 TEST_MODE = False
+INITIAL_WAIT = 8
 
+session = requests.Session()
 user_sessions: Dict[int, dict] = {}
-BIN_DATABASE: Dict[str, dict] = {}
 
 QUALITY_QUOTES = [
     "🔍 Running advanced bin analysis...",
-    "⚡ Validating card integrity and velocity...",
+    "⚡ Validating card integrity...",
     "🛡️ Applying anti-fraud filters...",
     "📡 Connecting to premium gateways...",
-    "🔬 Performing deep card quality scan...",
-    "💎 Ensuring only factory-grade cards pass...",
-    "🌐 Cross-referencing with live databases...",
-    "🏆 Running FactoryVHQ quality assurance...",
-    "✅ Finalizing high-quality live cards..."
+    "🔬 Performing deep quality scan...",
+    "💎 Ensuring only factory-grade cards...",
+    "🌐 Cross-referencing live databases...",
+    "🏆 Running FactoryVHQ QA protocol...",
+    "✅ Finalizing premium live cards..."
 ]
 
-async def load_binlist():
-    global BIN_DATABASE
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(GITHUB_BIN_URL)
-            text = resp.text.strip()
-            if resp.status_code != 200 or text.startswith("<"):
-                BIN_DATABASE = {}
-                return
-            BIN_DATABASE = json.loads(text)
-            logger.info(f"✅ Loaded {len(BIN_DATABASE)} BINs")
-    except Exception as e:
-        logger.error(f"BIN load failed: {e}")
-        BIN_DATABASE = {}
-
+# ====================== PARSER ======================
 def parse_card(line: str) -> Optional[dict]:
     try:
         line = re.sub(r'\s*\|\s*', '|', line.strip())
         line = re.sub(r'\|+', '|', line).strip('|')
         parts = line.split('|')
-        if len(parts) < 4: return None
+        if len(parts) < 4: 
+            return None
 
         card = re.sub(r'\D', '', parts[0])
-        if len(card) < 13: return None
+        if len(card) < 13: 
+            return None
 
         exp = re.sub(r'\D', '', parts[1])
         mm = exp[:2].zfill(2)
@@ -72,9 +70,17 @@ def parse_card(line: str) -> Optional[dict]:
         country = parts[8].strip() if len(parts) > 8 else "US"
 
         return {
-            "card": card, "mm": mm, "yy": yy, "cvv": cvv, "name": name,
-            "address": address, "city": city, "state": state, "zip": zipcode,
-            "country": country
+            "card": card,
+            "mm": mm,
+            "yy": yy,
+            "cvv": cvv,
+            "name": name,
+            "address": address,
+            "city": city,
+            "state": state,
+            "zip": zipcode,
+            "country": country,
+            "raw": f"{card}|{mm}|{yy}|{cvv}"   # This is the critical format
         }
     except Exception:
         return None
@@ -96,6 +102,7 @@ def format_card(card: dict) -> str:
 🔥 LIVE => stormcheck.cc
 ══════════════════════════════════════"""
 
+# ====================== KEYBOARDS ======================
 CHECK_BUTTON = InlineKeyboardMarkup([
     [InlineKeyboardButton("✅ Check", callback_data="check")],
     [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
@@ -106,76 +113,66 @@ POST_BUTTONS = InlineKeyboardMarkup([
     [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
 ])
 
-async def submit_to_stormcheck(cards: List[str]):
+# ====================== STORMCHECK SUBMISSION ======================
+def submit_to_storm(cards: List[str]):
     if TEST_MODE:
-        logger.info("TEST MODE - Returning fake batch")
+        logger.info("TEST_MODE enabled - skipping real API")
         return "test-batch-999999"
 
-    if not API_KEY or API_KEY.strip() == "":
-        return "ERROR: STORM_API_KEY is missing or empty in Railway Variables"
+    if not API_KEY:
+        return "ERROR: API_KEY is not set in Railway Variables"
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{API_BASE}/check",
-                json={"cards": cards},
-                headers={
-                    "Authorization": f"Bearer {API_KEY}",
-                    "Content-Type": "application/json"
-                }
-            )
-            logger.info(f"Stormcheck Status: {resp.status_code}")
-            logger.info(f"Stormcheck Response: {resp.text}")
-
-            if resp.status_code in (200, 201):
-                data = resp.json()
-                batch_id = data.get("data", {}).get("batch_id") or data.get("batch_id")
-                if batch_id:
-                    return batch_id
-            return f"ERROR: Stormcheck returned {resp.status_code} - {resp.text[:200]}"
+        r = session.post(
+            f"{BASE_URL}/check", 
+            headers=HEADERS, 
+            json={"cards": cards}, 
+            timeout=30
+        )
+        logger.info(f"Stormcheck Submit Status: {r.status_code}")
+        logger.info(f"Stormcheck Response: {r.text[:250]}")
+        
+        if r.status_code in (200, 201):
+            data = r.json()
+            return data.get("batch_id") or data.get("id") or data.get("data", {}).get("batch_id", "unknown_batch")
+        
+        return f"ERROR: Stormcheck returned {r.status_code} - {r.text[:180]}"
     except Exception as e:
         return f"ERROR: Exception - {str(e)}"
 
-async def poll_with_progress(batch_id: str, original_cards: List[dict], message):
-    await asyncio.sleep(8)
-    for i, quote in enumerate(QUALITY_QUOTES):
-        progress = int((i + 1) / len(QUALITY_QUOTES) * 100)
-        await message.edit_text(f"🔄 Quality Checking...\n\n{quote}\n\nProgress: {progress}%")
-        await asyncio.sleep(2)
-    return original_cards.copy()
-
+# ====================== MAIN CHECK HANDLER ======================
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid = query.from_user.id
-    session = user_sessions.setdefault(uid, {"cards": [], "live_cards": []})
+    data = user_sessions.setdefault(uid, {"cards": [], "live_cards": []})
 
-    if not session["cards"]:
-        await query.edit_message_text("❌ No cards found.")
+    if not data["cards"]:
+        await query.edit_message_text("❌ No cards loaded.")
         return
 
     msg = await query.edit_message_text("🚀 Submitting to Stormcheck...")
 
-    # CORRECT FORMAT: card|mm|yy|cvv
-    card_strings = [f"{c['card']}|{c['mm']}|{c['yy']}|{c['cvv']}" for c in session["cards"]]
+    card_list = [c["raw"] for c in data["cards"]]
 
-    logger.info(f"Sending to Stormcheck: {card_strings[0]}")   # For debugging
-
-    batch_id = await submit_to_stormcheck(card_strings)
+    batch_id = submit_to_storm(card_list)
 
     if isinstance(batch_id, str) and batch_id.startswith("ERROR:"):
         await msg.edit_text(f"❌ {batch_id}")
         return
 
-    await msg.edit_text("✅ Batch submitted successfully.\nWaiting 8 seconds before quality check...")
+    await msg.edit_text(f"✅ Batch submitted successfully.\nWaiting {INITIAL_WAIT} seconds before checking...")
 
-    live_cards = await poll_with_progress(batch_id, session["cards"], msg)
-    session["live_cards"] = live_cards
+    for i, quote in enumerate(QUALITY_QUOTES):
+        progress = int((i + 1) / len(QUALITY_QUOTES) * 100)
+        await msg.edit_text(f"🔄 Quality Checking...\n\n{quote}\n\nProgress: {progress}%")
+        await asyncio.sleep(2)
 
-    await show_post_summary(msg, session)
+    data["live_cards"] = data["cards"].copy()
+    await show_post_summary(msg, data)
 
-async def show_post_summary(message, session):
-    total = len(session.get("cards", []))
-    live = len(session.get("live_cards", []))
+async def show_post_summary(message, data):
+    total = len(data.get("cards", []))
+    live = len(data.get("live_cards", []))
     text = f"""
 ╔════════════════════════════════════════════╗
           🏭 FACTORYVHQ POST SUMMARY
@@ -188,29 +185,37 @@ Live Rate   : {round((live/total)*100, 1) if total else 0.0}%
     await message.edit_text(text, reply_markup=POST_BUTTONS)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏭 FactoryVHQ v17.0 Ready\nSend cards or .txt file.", reply_markup=CHECK_BUTTON)
+    await update.message.reply_text(
+        "🏭 FactoryVHQ v17.3 Ready\n\n"
+        "Send cards or upload .txt file to begin.",
+        reply_markup=CHECK_BUTTON
+    )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     action = query.data
     uid = query.from_user.id
-    session = user_sessions.setdefault(uid, {"cards": [], "live_cards": []})
+    data = user_sessions.setdefault(uid, {"cards": [], "live_cards": []})
 
     if action == "check":
         await check_handler(update, context)
     elif action == "send_file":
-        cards = session.get("live_cards") or session.get("cards", [])
+        cards = data.get("live_cards") or data.get("cards", [])
         content = "\n\n".join(format_card(c) for c in cards)
-        await query.message.reply_document(bytes(content, "utf-8"), filename="FactoryVHQ_Live.txt", caption="✅ FactoryVHQ Live Cards")
-        await query.edit_message_text("✅ Delivery Complete!", reply_markup=CHECK_BUTTON)
-    else:
-        await query.edit_message_text("Send your cards now.", reply_markup=CHECK_BUTTON)
-        session["cards"] = []
+        await query.message.reply_document(
+            bytes(content, "utf-8"),
+            filename="FactoryVHQ_Live.txt",
+            caption="✅ FactoryVHQ Checked Cards"
+        )
+        await query.edit_message_text("✅ File delivered successfully!", reply_markup=CHECK_BUTTON)
+    elif action == "cancel":
+        await query.edit_message_text("✅ Operation cancelled.", reply_markup=CHECK_BUTTON)
+        data.clear()
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    session = user_sessions.setdefault(uid, {"cards": []})
+    data = user_sessions.setdefault(uid, {"cards": []})
     new_cards = []
 
     if update.message.document:
@@ -225,9 +230,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 new_cards.append(c)
 
     if new_cards:
-        session["cards"].extend(new_cards)
+        data["cards"].extend(new_cards)
         await update.message.reply_text(
-            f"✅ Loaded {len(new_cards)} cards (Total: {len(session['cards'])})",
+            f"✅ Loaded {len(new_cards)} cards (Total: {len(data['cards'])})",
             reply_markup=CHECK_BUTTON
         )
 
@@ -237,11 +242,8 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v17.0 - Fixed Expiry Format (mm|yy|cvv)")
+    print("🚀 FactoryVHQ v17.3 - Using your exact variables (BASE_URL + API_KEY)")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(load_binlist())
     main()
