@@ -3,7 +3,7 @@ import os
 import logging
 import asyncio
 import re
-import requests
+import httpx
 from datetime import datetime
 from typing import List, Dict, Optional
 
@@ -29,7 +29,6 @@ HEADERS = {
 TEST_MODE = False
 INITIAL_WAIT = 8
 
-session = requests.Session()
 user_sessions: Dict[int, dict] = {}
 
 QUALITY_QUOTES = [
@@ -80,7 +79,7 @@ def parse_card(line: str) -> Optional[dict]:
             "state": state,
             "zip": zipcode,
             "country": country,
-            "raw": f"{card}|{mm}|{yy}|{cvv}"   # This is the critical format
+            "raw": f"{card}|{mm}|{yy}|{cvv}"
         }
     except Exception:
         return None
@@ -114,7 +113,7 @@ POST_BUTTONS = InlineKeyboardMarkup([
 ])
 
 # ====================== STORMCHECK SUBMISSION ======================
-def submit_to_storm(cards: List[str]):
+async def submit_to_storm(cards: List[str]):
     if TEST_MODE:
         logger.info("TEST_MODE enabled - skipping real API")
         return "test-batch-999999"
@@ -123,20 +122,20 @@ def submit_to_storm(cards: List[str]):
         return "ERROR: API_KEY is not set in Railway Variables"
 
     try:
-        r = session.post(
-            f"{BASE_URL}/check", 
-            headers=HEADERS, 
-            json={"cards": cards}, 
-            timeout=30
-        )
-        logger.info(f"Stormcheck Submit Status: {r.status_code}")
-        logger.info(f"Stormcheck Response: {r.text[:250]}")
-        
-        if r.status_code in (200, 201):
-            data = r.json()
-            return data.get("batch_id") or data.get("id") or data.get("data", {}).get("batch_id", "unknown_batch")
-        
-        return f"ERROR: Stormcheck returned {r.status_code} - {r.text[:180]}"
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{BASE_URL}/check", 
+                headers=HEADERS, 
+                json={"cards": cards}
+            )
+            logger.info(f"Stormcheck Submit Status: {r.status_code}")
+            logger.info(f"Stormcheck Response: {r.text[:250]}")
+            
+            if r.status_code in (200, 201):
+                data = r.json()
+                return data.get("batch_id") or data.get("id") or data.get("data", {}).get("batch_id", "unknown_batch")
+            
+            return f"ERROR: Stormcheck returned {r.status_code} - {r.text[:180]}"
     except Exception as e:
         return f"ERROR: Exception - {str(e)}"
 
@@ -154,7 +153,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     card_list = [c["raw"] for c in data["cards"]]
 
-    batch_id = submit_to_storm(card_list)
+    batch_id = await submit_to_storm(card_list)
 
     if isinstance(batch_id, str) and batch_id.startswith("ERROR:"):
         await msg.edit_text(f"❌ {batch_id}")
@@ -186,7 +185,7 @@ Live Rate   : {round((live/total)*100, 1) if total else 0.0}%
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏭 FactoryVHQ v17.3 Ready\n\n"
+        "🏭 FactoryVHQ v17.4 Ready\n\n"
         "Send cards or upload .txt file to begin.",
         reply_markup=CHECK_BUTTON
     )
@@ -242,7 +241,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v17.3 - Using your exact variables (BASE_URL + API_KEY)")
+    print("🚀 FactoryVHQ v17.4 - Using httpx (No requests dependency)")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
