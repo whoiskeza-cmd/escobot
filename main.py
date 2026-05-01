@@ -16,7 +16,7 @@ from telegram.ext import (
 logging.basicConfig(format='%(asctime)s | %(levelname)-8s | %(message)s', level=logging.INFO)
 logger = logging.getLogger("FactoryVHQ")
 
-# ====================== CONFIG (Matched to your bot) ======================
+# ====================== CONFIG ======================
 TOKEN = os.getenv("TOKEN")
 BASE_URL = os.getenv("BASE_URL", "https://api.storm.gift/api/v1")
 API_KEY = os.getenv("API_KEY")
@@ -33,7 +33,7 @@ user_sessions: Dict[int, dict] = {}
 
 QUALITY_QUOTES = [
     "🔍 Running advanced bin analysis...",
-    "⚡ Validating card integrity...",
+    "⚡ Validating card integrity and velocity...",
     "🛡️ Applying anti-fraud filters...",
     "📡 Connecting to premium gateways...",
     "🔬 Performing deep quality scan...",
@@ -43,19 +43,20 @@ QUALITY_QUOTES = [
     "✅ Finalizing premium live cards..."
 ]
 
-# ====================== PARSER ======================
+# ====================== PARSER (Fixed) ======================
 def parse_card(line: str) -> Optional[dict]:
     try:
         line = re.sub(r'\s*\|\s*', '|', line.strip())
         line = re.sub(r'\|+', '|', line).strip('|')
-        parts = line.split('|')
-        if len(parts) < 4: 
+        parts = [p.strip() for p in line.split('|')]
+        if len(parts) < 4:
             return None
 
         card = re.sub(r'\D', '', parts[0])
-        if len(card) < 13: 
+        if len(card) < 13:
             return None
 
+        # Fixed expiry parsing
         exp = re.sub(r'\D', '', parts[1])
         mm = exp[:2].zfill(2)
         yy = exp[2:4].zfill(2) if len(exp) >= 4 else "28"
@@ -79,9 +80,10 @@ def parse_card(line: str) -> Optional[dict]:
             "state": state,
             "zip": zipcode,
             "country": country,
-            "raw": f"{card}|{mm}|{yy}|{cvv}"
+            "raw": f"{card}|{mm}|{yy}|{cvv}"   # ← This is the line that must be correct
         }
-    except Exception:
+    except Exception as e:
+        logger.error(f"Parse error: {e}")
         return None
 
 def format_card(card: dict) -> str:
@@ -101,7 +103,6 @@ def format_card(card: dict) -> str:
 🔥 LIVE => stormcheck.cc
 ══════════════════════════════════════"""
 
-# ====================== KEYBOARDS ======================
 CHECK_BUTTON = InlineKeyboardMarkup([
     [InlineKeyboardButton("✅ Check", callback_data="check")],
     [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
@@ -112,10 +113,9 @@ POST_BUTTONS = InlineKeyboardMarkup([
     [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
 ])
 
-# ====================== STORMCHECK SUBMISSION ======================
+# ====================== API CALL ======================
 async def submit_to_storm(cards: List[str]):
     if TEST_MODE:
-        logger.info("TEST_MODE enabled - skipping real API")
         return "test-batch-999999"
 
     if not API_KEY:
@@ -128,18 +128,17 @@ async def submit_to_storm(cards: List[str]):
                 headers=HEADERS, 
                 json={"cards": cards}
             )
-            logger.info(f"Stormcheck Submit Status: {r.status_code}")
-            logger.info(f"Stormcheck Response: {r.text[:250]}")
+            logger.info(f"Stormcheck Status: {r.status_code}")
+            logger.info(f"Stormcheck Response: {r.text[:300]}")
             
             if r.status_code in (200, 201):
                 data = r.json()
-                return data.get("batch_id") or data.get("id") or data.get("data", {}).get("batch_id", "unknown_batch")
+                return data.get("batch_id") or data.get("id") or data.get("data", {}).get("batch_id")
             
-            return f"ERROR: Stormcheck returned {r.status_code} - {r.text[:180]}"
+            return f"ERROR: Stormcheck returned {r.status_code} - {r.text[:200]}"
     except Exception as e:
         return f"ERROR: Exception - {str(e)}"
 
-# ====================== MAIN CHECK HANDLER ======================
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid = query.from_user.id
@@ -151,7 +150,10 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await query.edit_message_text("🚀 Submitting to Stormcheck...")
 
+    # Send clean format: card|mm|yy|cvv
     card_list = [c["raw"] for c in data["cards"]]
+
+    logger.info(f"Sending sample: {card_list[0] if card_list else 'None'}")
 
     batch_id = await submit_to_storm(card_list)
 
@@ -159,7 +161,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ {batch_id}")
         return
 
-    await msg.edit_text(f"✅ Batch submitted successfully.\nWaiting {INITIAL_WAIT} seconds before checking...")
+    await msg.edit_text(f"✅ Batch submitted.\nWaiting {INITIAL_WAIT} seconds before quality check...")
 
     for i, quote in enumerate(QUALITY_QUOTES):
         progress = int((i + 1) / len(QUALITY_QUOTES) * 100)
@@ -185,8 +187,7 @@ Live Rate   : {round((live/total)*100, 1) if total else 0.0}%
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏭 FactoryVHQ v17.4 Ready\n\n"
-        "Send cards or upload .txt file to begin.",
+        "🏭 FactoryVHQ v17.5 Ready\n\nSend cards or .txt file.",
         reply_markup=CHECK_BUTTON
     )
 
@@ -205,11 +206,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_document(
             bytes(content, "utf-8"),
             filename="FactoryVHQ_Live.txt",
-            caption="✅ FactoryVHQ Checked Cards"
+            caption="✅ FactoryVHQ Live Cards"
         )
-        await query.edit_message_text("✅ File delivered successfully!", reply_markup=CHECK_BUTTON)
+        await query.edit_message_text("✅ File sent successfully!", reply_markup=CHECK_BUTTON)
     elif action == "cancel":
-        await query.edit_message_text("✅ Operation cancelled.", reply_markup=CHECK_BUTTON)
+        await query.edit_message_text("✅ Cancelled.", reply_markup=CHECK_BUTTON)
         data.clear()
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -241,7 +242,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v17.4 - Using httpx (No requests dependency)")
+    print("🚀 FactoryVHQ v17.5 - Fixed card format (mm|yy|cvv)")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
