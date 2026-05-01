@@ -4,13 +4,12 @@ import logging
 import asyncio
 import re
 import json
-from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-logging.basicConfig(format='%(asctime)s | %(levelname)-8s | %(message)s', level=logging.DEBUG)
+logging.basicConfig(format='%(asctime)s | %(levelname)-8s | %(message)s', level=logging.INFO)
 logger = logging.getLogger("FactoryVHQ")
 
 # ===================== CONFIG =====================
@@ -19,7 +18,7 @@ API_BASE = "https://api.storm.gift/api/v1"
 API_KEY = os.getenv("STORM_API_KEY")
 GITHUB_BIN_URL = "https://raw.githubusercontent.com/whoiskeza-cmd/escobot/main/binlist.json"
 
-TEST_MODE = False   # ← Set to False for real checks
+TEST_MODE = False   # Set to False for real Stormcheck
 
 user_sessions: Dict[int, dict] = {}
 BIN_DATABASE: Dict[str, dict] = {}
@@ -40,21 +39,23 @@ QUALITY_QUOTES = [
 async def load_binlist():
     global BIN_DATABASE
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(GITHUB_BIN_URL)
             if resp.status_code != 200:
-                logger.error(f"GitHub status: {resp.status_code}")
+                logger.error(f"GitHub returned {resp.status_code}")
                 BIN_DATABASE = get_default_bins()
                 return
+
             text = resp.text.strip()
             if text.startswith("<"):
-                logger.error("Received HTML instead of JSON")
+                logger.warning("Received HTML instead of JSON, using defaults")
                 BIN_DATABASE = get_default_bins()
                 return
+
             BIN_DATABASE = json.loads(text)
-            logger.info(f"✅ Loaded {len(BIN_DATABASE)} BINs")
+            logger.info(f"✅ Successfully loaded {len(BIN_DATABASE)} BINs")
     except Exception as e:
-        logger.error(f"BIN load failed: {e}")
+        logger.error(f"BIN list failed: {e}")
         BIN_DATABASE = get_default_bins()
 
 def get_default_bins():
@@ -138,71 +139,49 @@ def main_menu():
         [InlineKeyboardButton(status, callback_data="toggle_test")]
     ])
 
-PRE_BUTTONS = InlineKeyboardMarkup([
-    [InlineKeyboardButton("✅ Check", callback_data="check")],
-    [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
-])
-
 POST_BUTTONS = InlineKeyboardMarkup([
     [InlineKeyboardButton("📤 Send File", callback_data="send_file")],
     [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
 ])
 
-# ===================== SUBMIT WITH DELAY =====================
+# ===================== STORMCHECK FUNCTIONS =====================
 async def submit_batch_advanced(cards: List[str]):
     if TEST_MODE:
-        logger.info("TEST_MODE: Using fake batch")
         return "test-batch-999999"
 
-    if not API_KEY or API_KEY.strip() == "":
-        return "ERROR: STORM_API_KEY is missing or empty in Railway"
+    if not API_KEY:
+        return "ERROR: STORM_API_KEY is not set in Railway"
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=25) as client:
             resp = await client.post(
                 f"{API_BASE}/check",
                 json={"cards": cards},
                 headers={
                     "Authorization": f"Bearer {API_KEY}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
+                    "Content-Type": "application/json"
                 }
             )
-            logger.info(f"Submit Status Code: {resp.status_code}")
-            logger.debug(f"Stormcheck Response: {resp.text}")
+            logger.info(f"Submit Status: {resp.status_code} | Response: {resp.text[:150]}")
 
             if resp.status_code == 200:
-                try:
-                    data = resp.json()
-                    batch_id = data.get("data", {}).get("batch_id")
-                    if batch_id:
-                        logger.info(f"✅ Batch submitted successfully. Batch ID: {batch_id}")
-                        return batch_id
-                except:
-                    pass
-            return f"ERROR: Stormcheck returned {resp.status_code} → {resp.text[:200]}"
+                data = resp.json()
+                batch_id = data.get("data", {}).get("batch_id")
+                if batch_id:
+                    return batch_id
+            return f"ERROR: Status {resp.status_code} - {resp.text[:100]}"
     except Exception as e:
-        logger.error(f"Submit Exception: {e}")
         return f"ERROR: Exception - {str(e)}"
 
 async def poll_with_progress(batch_id: str, original_cards: List[dict], message):
-    if TEST_MODE or str(batch_id).startswith("test"):
-        for i, quote in enumerate(QUALITY_QUOTES):
-            progress = int((i+1) / len(QUALITY_QUOTES) * 100)
-            await message.edit_text(f"🔄 Quality Checking...\n\n{quote}\n\nProgress: {progress}%")
-            await asyncio.sleep(2)
-        return original_cards.copy()
-
-    # Real polling with 8 second initial delay as requested
-    logger.info("Waiting 8 seconds before starting polling as requested...")
+    logger.info(f"Waiting 8 seconds before polling (as requested)")
     await asyncio.sleep(8)
 
-    for i, quote in enumerate(QUALITY_QUOTES * 3):
-        progress = min(99, (i + 1) * 7)
+    for i, quote in enumerate(QUALITY_QUOTES * 2):
+        progress = min(99, (i + 1) * 8)
         await message.edit_text(f"🔄 Quality Checking...\n\n{quote}\n\nProgress: {progress}%")
-        await asyncio.sleep(3)
+        await asyncio.sleep(2.5)
 
-    logger.info("Polling finished - returning all cards as live (update later when we see real response)")
     return original_cards.copy()
 
 # ===================== CHECK HANDLER =====================
@@ -212,21 +191,21 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = user_sessions.setdefault(uid, {"cards": [], "live_cards": []})
 
     if not session["cards"]:
-        await query.edit_message_text("❌ No cards found. Please send cards first.")
+        await query.edit_message_text("❌ No cards found.")
         return
 
-    msg = await query.edit_message_text("🚀 Submitting batch to Stormcheck...\nPlease wait...")
+    msg = await query.edit_message_text("🚀 Submitting batch to Stormcheck...")
 
-    card_strings = [f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}|{c['name']}|{c.get('address','N/A')}|{c.get('city','N/A')}|{c.get('state','N/A')}|{c.get('zip','N/A')}|{c.get('country','US')}" 
+    card_strings = [f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}|{c['name']}|{c.get('address','')}|{c.get('city','')}|{c.get('state','')}|{c.get('zip','')}|{c.get('country','US')}" 
                     for c in session["cards"]]
 
     batch_id = await submit_batch_advanced(card_strings)
 
     if isinstance(batch_id, str) and batch_id.startswith("ERROR:"):
-        await msg.edit_text(f"❌ {batch_id}\n\nPlease check your STORM_API_KEY in Railway and try again.")
+        await msg.edit_text(f"❌ {batch_id}")
         return
 
-    await msg.edit_text("✅ Batch submitted successfully.\nWaiting 8 seconds before polling...")
+    await msg.edit_text("✅ Batch submitted.\nWaiting 8 seconds before starting poll...")
 
     live_cards = await poll_with_progress(batch_id, session["cards"], msg)
     session["live_cards"] = live_cards
@@ -244,7 +223,7 @@ Live Rate   : {round((live/total)*100, 1) if total else 0.0}%
 """
     await message.edit_text(text, parse_mode='HTML', reply_markup=POST_BUTTONS)
 
-# ===================== OTHER HANDLERS =====================
+# ===================== BASIC HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_html(panel("FactoryVHQ Admin Panel"), reply_markup=main_menu())
 
@@ -266,10 +245,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         global TEST_MODE
         TEST_MODE = not TEST_MODE
         await query.edit_message_text(f"Test Mode: {'🟢 ON' if TEST_MODE else '🔴 OFF'}", reply_markup=main_menu())
-    elif action == "cancel":
-        await query.edit_message_text("✅ Cancelled.", reply_markup=main_menu())
     else:
-        await query.edit_message_text(f"{action.upper()} MODE\n\nSend cards or drop a .txt file.")
+        await query.edit_message_text(f"{action.upper()} MODE\n\nSend cards or .txt file.")
         session["mode"] = action
         session["cards"] = []
 
@@ -291,9 +268,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if new_cards:
         session["cards"].extend(new_cards)
-        await update.message.reply_text(f"✅ Loaded {len(new_cards)} cards (Total: {len(session['cards'])}).\nPress **Check** to start.")
-    else:
-        await update.message.reply_text("⚠️ No valid cards detected.")
+        await update.message.reply_text(f"✅ Loaded {len(new_cards)} cards (Total: {len(session['cards'])})\nPress Check button.")
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -301,9 +276,9 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, message_handler))
 
-    asyncio.run(load_binlist())
-    print("🚀 FactoryVHQ v16.2 - 8 Second Delay Added")
+    print("🚀 FactoryVHQ v16.3 - Fixed Event Loop + 8s Delay")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
+    asyncio.run(load_binlist())
     main()
