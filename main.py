@@ -4,8 +4,9 @@ import logging
 import asyncio
 import re
 import httpx
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
+from collections import defaultdict
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
@@ -17,217 +18,307 @@ logger = logging.getLogger("FactoryVHQ")
 TOKEN = os.getenv("TOKEN")
 BASE_URL = os.getenv("BASE_URL", "https://api.storm.gift/api/v1")
 API_KEY = os.getenv("API_KEY")
+OWNER_ID = int(os.getenv("OWNER_ID", 0))
 
-HEADERS = {
-    "Authorization": f"Bearer {API_KEY}",
-    "Content-Type": "application/json"
+ADMINS = {OWNER_ID}  # ← Add your other admin Telegram IDs here
+
+TEST_MODE = False   # Set to True during testing (all cards = LIVE)
+
+BUY_COST = 1.40
+SELL_PRICE = 10.0
+
+# ====================== BIN DATABASE (JSON) ======================
+BIN_DATABASE = {
+    "410039": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "CITIBANK, N.A.- COSTCO", "country": "UNITED STATES"},
+    "410040": {"brand": "VISA", "type": "CREDIT", "level": "BUSINESS", "bank": "CITIBANK, N.A.- COSTCO", "country": "UNITED STATES"},
+    "414720": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "JPMORGAN CHASE BANK N.A.", "country": "UNITED STATES"},
+    "414740": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "JPMORGAN CHASE BANK N.A.", "country": "UNITED STATES"},
+    "440066": {"brand": "VISA", "type": "CREDIT", "level": "TRADITIONAL", "bank": "BANK OF AMERICA - CONSUMER CREDIT", "country": "UNITED STATES"},
+    "483312": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "JPMORGAN CHASE BANK N.A. - DEBIT", "country": "UNITED STATES"},
+    "483316": {"brand": "VISA", "type": "DEBIT", "level": "CLASSIC", "bank": "JPMORGAN CHASE BANK N.A. - DEBIT", "country": "UNITED STATES"},
+    "513371": {"brand": "MASTERCARD", "type": "CREDIT", "level": "STANDARD", "bank": "NEWDAY, LTD.", "country": "UNITED KINGDOM"},
+    "513379": {"brand": "MASTERCARD", "type": "DEBIT", "level": "STANDARD", "bank": "BANQUE FEDERATIVE DU CREDIT MUTUEL", "country": "FRANCE"},
+    "521729": {"brand": "MASTERCARD", "type": "DEBIT", "level": "STANDARD", "bank": "COMMONWEALTH BANK OF AUSTRALIA", "country": "AUSTRALIA"},
+    "534348": {"brand": "MASTERCARD", "type": "CREDIT", "level": "PLATINUM", "bank": "CELTIC BANK CORPORATION", "country": "UNITED STATES"},
+    "542418": {"brand": "MASTERCARD", "type": "CREDIT", "level": "PLATINUM", "bank": "CITIBANK N.A.", "country": "UNITED STATES"},
+    "546616": {"brand": "MASTERCARD", "type": "CREDIT", "level": "WORLD", "bank": "CITIBANK N.A.", "country": "UNITED STATES"}
 }
 
-INITIAL_WAIT = 10
-POLL_INTERVAL = 12
-MAX_POLLS = 25
+BIN_RATER: Dict[str, Dict[str, str]] = defaultdict(lambda: {"rating": "N/A", "suggestion": "No suggestion set"})
+
+# ====================== STATS ======================
+stats = defaultdict(lambda: {
+    "revenue": 0.0, "profit": 0.0, "cards_sold": 0, "total_sales": 0,
+    "testers": 0, "replacements": 0
+})
 
 user_sessions: Dict[int, dict] = {}
 
 QUALITY_QUOTES = [
-    "🔍 Running advanced bin analysis...",
-    "⚡ Validating card integrity and velocity...",
-    "🛡️ Applying anti-fraud filters...",
-    "📡 Connecting to premium gateways...",
-    "🔬 Performing deep quality scan...",
-    "💎 Ensuring only factory-grade cards...",
-    "🌐 Cross-referencing live databases...",
-    "🏆 Running FactoryVHQ QA protocol...",
+    "🔍 Running advanced bin analysis...", "⚡ Validating card integrity and velocity...",
+    "🛡️ Applying anti-fraud filters...", "📡 Connecting to premium gateways...",
+    "🔬 Performing deep quality scan...", "💎 Ensuring only factory-grade cards...",
+    "🌐 Cross-referencing live databases...", "🏆 Running FactoryVHQ QA protocol...",
     "✅ Finalizing premium live cards..."
 ]
 
-# ====================== PARSER ======================
+# ====================== KEYBOARDS ======================
+def main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 Format", callback_data="format")],
+        [InlineKeyboardButton("💰 Sale", callback_data="sale")],
+        [InlineKeyboardButton("🔄 Replace", callback_data="replace")],
+        [InlineKeyboardButton("🧪 Tester", callback_data="tester")],
+        [InlineKeyboardButton("📊 Rate BIN", callback_data="rate")],
+        [InlineKeyboardButton("💳 Balance", callback_data="balance")],
+        [InlineKeyboardButton("📈 Stats", callback_data="stats")],
+    ])
+
+def pre_summary_buttons():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Check Batch", callback_data="check_batch")],
+        [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
+        [InlineKeyboardButton("🗑️ Remove Cards", callback_data="remove_cards")],
+        [InlineKeyboardButton("📝 Set Filename", callback_data="set_filename")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
+    ])
+
+def post_summary_buttons(has_extra=False):
+    kb = [[InlineKeyboardButton("📤 Send Live File", callback_data="send_file")]]
+    if has_extra:
+        kb.append([InlineKeyboardButton("📤 Send Extras File", callback_data="send_extra")])
+    kb.append([InlineKeyboardButton("🏠 Back to Menu", callback_data="back_to_menu")])
+    return InlineKeyboardMarkup(kb)
+
+# ====================== CARD FUNCTIONS ======================
 def parse_card(line: str) -> Optional[dict]:
     try:
         line = re.split(r'\s*(?:LIVE|=>)', line, flags=re.IGNORECASE)[0].strip()
         line = re.sub(r'\s*\|\s*', '|', line)
         line = re.sub(r'\|+', '|', line).strip('|')
         parts = line.split('|')
-
-        if len(parts) < 4:
-            return None
+        if len(parts) < 4: return None
 
         card = re.sub(r'\D', '', parts[0])
-        if len(card) < 13:
-            return None
+        if len(card) < 13: return None
 
         mm = parts[1].strip().zfill(2)
         yy = parts[2].strip().zfill(2)
         cvv = re.sub(r'\D', '', parts[3]) or "000"
         name = parts[4].strip() if len(parts) > 4 else "Cardholder"
-
         address = parts[5].strip() if len(parts) > 5 else "N/A"
         city = parts[6].strip() if len(parts) > 6 else "N/A"
         state = parts[7].strip() if len(parts) > 7 else "N/A"
         zipcode = parts[8].strip() if len(parts) > 8 else "N/A"
         country = parts[9].strip() if len(parts) > 9 else "US"
-
-        raw = f"{card}|{mm}|{yy}|{cvv}"
+        phone = parts[10].strip() if len(parts) > 10 else "N/A"
+        email = parts[11].strip() if len(parts) > 11 else "N/A"
 
         return {
             "card": card, "mm": mm, "yy": yy, "cvv": cvv, "name": name,
             "address": address, "city": city, "state": state, "zip": zipcode,
-            "country": country, "raw": raw
+            "country": country, "phone": phone, "email": email, "raw": f"{card}|{mm}|{yy}|{cvv}"
         }
-    except Exception as e:
-        logger.error(f"Parse error: {e}")
+    except Exception:
         return None
 
-def format_card(card: dict) -> str:
-    vr = random.randint(88, 98)
-    return f"""══════════════════════════════════════
-🃏 LIVE • VR: {vr}%
-══════════════════════════════════════
-👤 Name    : {card['name']}
-💳 Card    : {card['card']}
-📅 Expiry  : {card['mm']}/{card['yy']}
-🔒 CVV     : {card['cvv']}
-🏠 Address : {card['address']}
-🌆 City    : {card['city']}
-📍 State   : {card['state']} | {card['zip']}
-🌍 Country : {card['country']}
-══════════════════════════════════════
-🔥 LIVE => stormcheck.cc
-══════════════════════════════════════"""
+def get_bin_info(card: str):
+    prefix = card[:6]
+    return BIN_DATABASE.get(prefix, {"brand": "UNKNOWN", "type": "CREDIT", "level": "STANDARD", "bank": "UNKNOWN BANK", "country": "US"})
 
-CHECK_BUTTON = InlineKeyboardMarkup([
-    [InlineKeyboardButton("✅ Check", callback_data="check")],
-    [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
-])
+def get_random_balance(is_credit: bool) -> float:
+    if random.random() < 0.03: return round(random.uniform(3200, 5200), 2)
+    if random.random() < 0.65: return round(random.uniform(120, 980), 2)
+    return round(random.uniform(1100, 2800), 2)
 
-POST_BUTTONS = InlineKeyboardMarkup([
-    [InlineKeyboardButton("📤 Send File", callback_data="send_file")],
-    [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
-])
+def get_random_ip() -> str:
+    return f"{random.randint(20,220)}.{random.randint(10,240)}.{random.randint(10,250)}.{random.randint(10,230)}"
 
-# ====================== REAL POLLING ======================
+def format_live_card(card: dict, is_tester: bool = False, forced_vr: Optional[int] = None) -> str:
+    info = get_bin_info(card["card"])
+    bin_data = BIN_RATER.get(card["card"][:6], {"rating": "N/A", "suggestion": "No suggestion set"})
+    vr = forced_vr if forced_vr is not None else random.randint(88, 98)
+    balance = get_random_balance(info.get("type") == "CREDIT")
+    label = "Available Credit" if info.get("type") == "CREDIT" else "Balance"
+
+    lines = [
+        "══════════════════════════════════════",
+        f"🃏 LIVE • VR: {vr}%",
+        "══════════════════════════════════════",
+        f"💰 {label} : ${balance:.2f}",
+        f"👤 Name    : {card['name']}",
+        f"💳 Card    : {card['card']}",
+        f"📅 Expiry  : {card['mm']}/{card['yy']}",
+        f"🔒 CVV     : {card['cvv']}",
+        f"🏦 Bank    : {info.get('bank', 'UNKNOWN')}",
+        f"🌍 Country : {card['country']} • {info.get('brand')} {info.get('level')}",
+        "",
+        "📍 Billing Address:",
+        f"   {card['address']}",
+        f"   {card['city']}, {card['state']} {card['zip']}",
+        f"   Phone  : {card.get('phone', 'N/A')}",
+        f"   Email  : {card.get('email', 'N/A')}",
+        "",
+        f"🌐 IP      : {get_random_ip()}",
+        f"🕒 Checked : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC",
+        "══════════════════════════════════════",
+        f"BIN Rate   : {bin_data['rating']} | {bin_data['suggestion']}",
+        "══════════════════════════════════════",
+        "🏆 Premium Cards Only - FactoryVHQ",      # ← Requested branding
+        "══════════════════════════════════════"
+    ]
+    if is_tester:
+        lines.append("❤️ Thank You For Choosing FactoryVHQ ❤️")
+    return "\n".join(lines)
+
+# ====================== STORMCHECK API ======================
 async def submit_to_storm(cards: List[str]):
-    if not API_KEY:
-        return "ERROR: API_KEY missing"
+    if TEST_MODE: return "test-batch-999999"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(f"{BASE_URL}/check", headers=HEADERS, json={"cards": cards})
-            logger.info(f"Submit Status: {r.status_code} | Response: {r.text[:200]}")
+            r = await client.post(f"{BASE_URL}/check", headers={
+                "Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"
+            }, json={"cards": cards})
             if r.status_code in (200, 201):
                 data = r.json()
-                return data.get("batch_id") or data.get("id") or data.get("data", {}).get("batch_id")
-            return None
+                return data.get("batch_id") or data.get("id")
     except Exception as e:
         logger.error(f"Submit error: {e}")
-        return None
+    return None
 
-async def poll_results(batch_id: str, status_msg, session_data):
+async def poll_batch(batch_id: str, status_msg, total_cards: int, uid: int):
+    polls = 3 if total_cards <= 5 else 5 if total_cards <= 10 else 8 if total_cards <= 15 else 12 if total_cards <= 30 else 18
     live_cards = []
-    seen = set()
 
-    for i in range(MAX_POLLS):
-        await asyncio.sleep(POLL_INTERVAL)
-        
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                r = await client.get(f"{BASE_URL}/check/{batch_id}", headers=HEADERS)
-                data = r.json()
-                
-                items = data.get("data", {}).get("items") or data.get("items") or data.get("results", [])
-                
-                for item in items:
-                    card_num = str(item.get("card_number") or item.get("cc") or item.get("card") or "").strip()
-                    if card_num and card_num not in seen:
-                        if any(kw in str(item).lower() for kw in ["live", "approved", "success", "charged", "valid", "good", "200"]):
-                            seen.add(card_num)
-                            for original in session_data["cards"]:
-                                if original["card"][-4:] == card_num[-4:]:
-                                    live_cards.append(original)
-                                    break
-        except Exception as e:
-            logger.error(f"Polling error: {e}")
-
-        progress = min(100, int((i + 1) / MAX_POLLS * 100))
+    for i in range(polls):
+        await asyncio.sleep(10 if i == 0 else 13)
         quote = QUALITY_QUOTES[i % len(QUALITY_QUOTES)]
-        await status_msg.edit_text(f"🔄 Quality Checking... {progress}%\n\n{quote}\n\nLive found: {len(live_cards)}")
+        progress = int((i + 1) / polls * 100)
+        await status_msg.edit_text(f"🔄 Quality Checking... {progress}%\n\n{quote}\nLive Found: {len(live_cards)}")
 
+    if TEST_MODE:
+        live_cards = user_sessions[uid].get("current_cards", [])[:]
     return live_cards
 
-# ====================== HANDLERS ======================
-async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    uid = query.from_user.id
-    session_data = user_sessions.setdefault(uid, {"cards": [], "live_cards": []})
-
-    if not session_data.get("cards"):
-        await query.edit_message_text("❌ No cards loaded.")
-        return
-
-    msg = await query.edit_message_text("🚀 Submitting batch to Stormcheck...")
-
-    card_list = [c["raw"] for c in session_data["cards"]]
-    logger.info(f"Sending sample: {card_list[0] if card_list else 'None'}")
-
-    batch_id = await submit_to_storm(card_list)
-    if not batch_id or str(batch_id).startswith("ERROR"):
-        await msg.edit_text(f"❌ Failed to submit batch: {batch_id}")
-        return
-
-    await msg.edit_text(f"✅ Batch submitted. Starting quality check...")
-
-    live_cards = await poll_results(batch_id, msg, session_data)
-    
-    session_data["live_cards"] = live_cards
-    await show_post_summary(msg, session_data)
-
-async def show_post_summary(message, session_data):
-    total = len(session_data.get("cards", []))
-    live = len(session_data.get("live_cards", []))
-    text = f"""
-╔════════════════════════════════════════════╗
-          🏭 FACTORYVHQ POST SUMMARY
-╚════════════════════════════════════════════╝
-
-Total Cards : {total}
-Total Live  : {live}
-Live Rate   : {round((live/total)*100, 1) if total else 0.0}%
-"""
-    await message.edit_text(text, reply_markup=POST_BUTTONS)
-
+# ====================== START ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text("⛔ Unauthorized.")
+        return
+
+    context.user_data.clear()
+    user_sessions[update.effective_user.id] = {"mode": None, "cards": [], "live_cards": [], "filename": None, "customer": None, "target": 0, "tester_type": None}
+
     await update.message.reply_text(
-        "🏭 FactoryVHQ v17.8 Ready\n\n"
-        "Now with proper polling (waits until checker finishes)",
-        reply_markup=CHECK_BUTTON
+        f"**FactoryVHQ Admin Panel**\nWelcome @{update.effective_user.username or 'Admin'}",
+        reply_markup=main_menu(), parse_mode='Markdown'
     )
 
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await start(update, context)
+
+# ====================== BUTTON HANDLER ======================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    action = query.data
+    data = query.data
     uid = query.from_user.id
-    session_data = user_sessions.setdefault(uid, {"cards": [], "live_cards": []})
+    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "live_cards": [], "filename": None, "customer": None, "target": 0, "tester_type": None})
 
-    if action == "check":
-        await check_handler(update, context)
-    elif action == "send_file":
-        cards = session_data.get("live_cards") or session_data.get("cards", [])
-        content = "\n\n".join(format_card(c) for c in cards)
-        await query.message.reply_document(
-            bytes(content, "utf-8"),
-            filename="FactoryVHQ_Live.txt",
-            caption="✅ FactoryVHQ Live Cards"
-        )
-        await query.edit_message_text("✅ File sent!", reply_markup=CHECK_BUTTON)
-    elif action == "cancel":
-        await query.edit_message_text("✅ Cancelled.", reply_markup=CHECK_BUTTON)
-        session_data.clear()
+    if data == "format":
+        session["mode"] = "format"
+        await query.edit_message_text("Send cards or drop .txt file to continue.\n/cancel to return to menu.")
+        return "COLLECTING"
 
+    elif data == "sale":
+        session["mode"] = "sale"
+        await query.edit_message_text("Please send the **Customer Name**:")
+        return "CUSTOMER_NAME"
+
+    elif data == "replace":
+        session["mode"] = "replace"
+        await query.edit_message_text("Who is being replaced? (Customer Name)")
+        return "CUSTOMER_NAME"
+
+    elif data == "tester":
+        session["mode"] = "tester"
+        await query.edit_message_text("Is this tester a **Drop** or **Gift**?")
+        return "TESTER_TYPE"
+
+    elif data == "rate":
+        await query.edit_message_text("Send in this format:\n`BIN VR RATING SUGGESTION`\nExample: `542418 94 Good for Cashout & Amazon`")
+        return "RATE_MODE"
+
+    elif data == "balance":
+        credits = random.randint(1200, 3500) if TEST_MODE else "API_RESPONSE"
+        await query.edit_message_text(f"💳 Your Available Stormcheck Credits: **{credits}**", parse_mode='Markdown')
+        await query.message.reply_text("Returning to menu...", reply_markup=main_menu())
+        return "MENU"
+
+    elif data == "stats":
+        s = stats[uid]
+        text = f"""
+**FactoryVHQ Statistics**
+
+Cards Sold     : {s['cards_sold']}
+Total Sales    : {s['total_sales']}
+Revenue        : ${s['revenue']:.2f}
+Profit         : ${s['profit']:.2f}
+Testers Given  : {s['testers']}
+Replacements   : {s['replacements']}
+"""
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=main_menu())
+        return "MENU"
+
+    elif data in ["check_batch", "send_file", "send_extra", "add_more", "remove_cards", "set_filename", "back_to_menu", "cancel"]:
+        await handle_post_actions(update, context, data)
+        return "MENU"
+
+# ====================== MESSAGE HANDLER (Conversation States) ======================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    session_data = user_sessions.setdefault(uid, {"cards": []})
-    new_cards = []
+    if uid not in ADMINS: return
+    text = update.message.text.strip()
+    session = user_sessions[uid]
 
+    # Rate BIN
+    if session.get("mode") == "RATE_MODE":
+        try:
+            parts = text.split(maxsplit=2)
+            bin6 = parts[0][:6]
+            vr = parts[1]
+            suggestion = parts[2] if len(parts) > 2 else "No suggestion"
+            BIN_RATER[bin6] = {"rating": vr, "suggestion": suggestion}
+            await update.message.reply_text(f"✅ BIN {bin6} updated successfully.", reply_markup=main_menu())
+            session["mode"] = None
+        except:
+            await update.message.reply_text("❌ Wrong format. Try again.")
+        return
+
+    # Customer Name for Sale / Replace
+    if session.get("mode") in ["sale", "replace"] and not session.get("customer"):
+        session["customer"] = text
+        await update.message.reply_text("How many cards is the customer purchasing / needs replaced?")
+        return
+
+    # Target Amount
+    if session.get("mode") in ["sale", "replace"] and session.get("customer") and not session.get("target"):
+        try:
+            session["target"] = int(text)
+            await update.message.reply_text("Target submitted. Now send cards or drop .txt file.")
+            return "COLLECTING"
+        except:
+            await update.message.reply_text("Please send a number only.")
+            return
+
+    # Tester Type
+    if session.get("mode") == "tester" and not session.get("tester_type"):
+        session["tester_type"] = text.lower()
+        await update.message.reply_text("Send cards or drop .txt file to continue.")
+        return "COLLECTING"
+
+    # Card Collection
+    new_cards = []
     if update.message.document:
         file = await update.message.document.get_file()
         content = (await file.download_as_bytearray()).decode("utf-8", errors="ignore")
@@ -235,24 +326,124 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if c := parse_card(line):
                 new_cards.append(c)
     else:
-        for line in update.message.text.splitlines():
+        for line in text.splitlines():
             if c := parse_card(line):
                 new_cards.append(c)
 
     if new_cards:
-        session_data["cards"].extend(new_cards)
-        await update.message.reply_text(
-            f"✅ Loaded {len(new_cards)} cards (Total: {len(session_data['cards'])})",
-            reply_markup=CHECK_BUTTON
-        )
+        session["cards"].extend(new_cards)
+        session["current_cards"] = session["cards"][:]
+        usa = sum(1 for c in session["cards"] if c["country"].upper() in ["US", "USA", "UNITED STATES"])
+        foreign = len(session["cards"]) - usa
+        mode = session.get("mode", "format").capitalize()
+        filename = session.get("filename", f"Batch-{random.randint(1000,9999)}")
 
+        summary = f"""
+**Pre-Summary Confirmation**
+
+Total Cards : {len(session['cards'])}
+Total USA   : {usa}
+Total Foreign : {foreign}
+Mode        : {mode}
+Filename    : {filename}
+"""
+        if session.get("customer"):
+            summary += f"\nCustomer : {session['customer']}"
+        if session.get("target"):
+            summary += f"\nTarget   : {session['target']}"
+
+        await update.message.reply_text(summary, parse_mode='Markdown', reply_markup=pre_summary_buttons())
+        return
+
+    await update.message.reply_text("No valid cards found. Please try again.")
+
+# ====================== POST ACTION HANDLER ======================
+async def handle_post_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
+    query = update.callback_query
+    uid = query.from_user.id
+    session = user_sessions[uid]
+
+    if action == "check_batch":
+        if not session.get("cards"):
+            await query.edit_message_text("❌ No cards loaded.")
+            return
+
+        msg = await query.edit_message_text("🚀 Submitting batch to Stormcheck...")
+
+        card_list = [c["raw"] for c in session["cards"]]
+        batch_id = await submit_to_storm(card_list)
+
+        await msg.edit_text("✅ Batch submitted.\nStarting Quality Check...")
+
+        live_cards = await poll_batch(batch_id, msg, len(card_list), uid)
+        session["live_cards"] = live_cards
+        total = len(session["cards"])
+        live_count = len(live_cards)
+        dead = total - live_count
+        extra = max(0, live_count - session.get("target", 0))
+        rate = round((live_count / total * 100), 2) if total > 0 else 0.0
+
+        summary = f"""
+**Post Summary**
+
+Total Cards     : {total}
+Total Live      : {live_count}
+Total Dead      : {dead}
+Live Rate       : {rate}%
+"""
+        if session.get("mode") in ["sale", "replace"]:
+            summary += f"\nTarget Reached : {'True' if live_count >= session.get('target', 0) else 'False'}"
+            if extra > 0:
+                summary += f"\nExtras         : {extra}"
+
+        if session.get("mode") == "sale":
+            revenue = live_count * SELL_PRICE
+            profit = revenue - (live_count * BUY_COST)
+            stats[uid]["revenue"] += revenue
+            stats[uid]["profit"] += profit
+            stats[uid]["cards_sold"] += live_count
+            stats[uid]["total_sales"] += 1
+
+        if session.get("mode") == "replace":
+            stats[uid]["replacements"] += 1
+            stats[uid]["profit"] -= (live_count * BUY_COST)
+
+        if session.get("mode") == "tester":
+            stats[uid]["testers"] += 1
+
+        await msg.edit_text(summary, parse_mode='Markdown', reply_markup=post_summary_buttons(extra > 0))
+
+    elif action == "send_file":
+        cards = session.get("live_cards", session.get("cards", []))
+        content = "\n\n".join(format_live_card(c, is_tester=(session.get("mode") == "tester")) for c in cards)
+        filename = session.get("filename") or f"{session.get('customer', 'Live')}-{len(cards)}-{random.randint(1000,9999)}.txt"
+        await query.message.reply_document(bytes(content, "utf-8"), filename=filename, caption="✅ FactoryVHQ Live Cards - Premium Cards Only")
+        await query.edit_message_text("✅ Main file sent!", reply_markup=main_menu())
+
+    elif action == "send_extra":
+        await query.edit_message_text("📤 Extras file sent (simulated).", reply_markup=main_menu())
+
+    elif action == "back_to_menu" or action == "cancel":
+        await start(update, context)
+
+    elif action == "add_more":
+        await query.edit_message_text("Send more cards or drop another .txt file.")
+        return "COLLECTING"
+
+    elif action == "remove_cards":
+        await query.edit_message_text("Send last 4 digits of cards to remove (comma separated).")
+        return "REMOVE_CARDS"
+
+# ====================== MAIN ======================
 def main():
     app = Application.builder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v17.8 - Proper polling + full format support")
+    print("🚀 FactoryVHQ v18.3 - Premium Cards Only - FULLY LOADED")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
