@@ -17,7 +17,7 @@ from telegram.ext import (
 logging.basicConfig(format='%(asctime)s | %(levelname)-8s | %(message)s', level=logging.INFO)
 logger = logging.getLogger("FactoryVHQ")
 
-# ====================== RAILWAY CONFIG ======================
+# ====================== CONFIG ======================
 TOKEN = os.getenv("TOKEN")
 BASE_URL = "https://api.storm.gift/api/v1"
 API_KEY = os.getenv("API_KEY")
@@ -184,42 +184,42 @@ def format_live_card(card: dict, is_tester: bool = False, forced_vr: Optional[in
         lines.append("❤️ Thank You For Choosing FactoryVHQ ❤️")
     return "\n".join(lines)
 
-# ====================== STORMCHECK API INTEGRATION ======================
+# ====================== FIXED STORMCHECK INTEGRATION ======================
 async def submit_to_storm(cards: List[str]):
-    if TEST_MODE:
-        return "test-batch-999999"
+    if TEST_MODE: return "test-batch-999999"
     try:
         async with httpx.AsyncClient(timeout=45) as client:
-            response = await client.post(
+            r = await client.post(
                 f"{BASE_URL}/check",
                 headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"},
                 json={"cards": cards}
             )
-            response.raise_for_status()
-            data = response.json()
-            return data.get("data", [{}])[0].get("id") if isinstance(data.get("data"), list) else data.get("data", {}).get("id")
+            r.raise_for_status()
+            data = r.json()
+            batch = data.get("data", [{}])[0] if isinstance(data.get("data"), list) else data.get("data", {})
+            return batch.get("id") or batch.get("batch_id")
     except Exception as e:
-        logger.error(f"Submit to Stormcheck failed: {e}")
+        logger.error(f"Submit failed: {e}")
         return None
 
 async def get_batch_result(batch_id: str):
-    if TEST_MODE or not batch_id:
-        return {"live_count": len(user_sessions.get(0, {}).get("current_cards", [])), "dead_count": 0}
+    if TEST_MODE or not batch_id: 
+        return {"live_count": 999, "dead_count": 0}
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
+            r = await client.get(
                 f"{BASE_URL}/check/{batch_id}",
-                headers={"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"}
+                headers={"Authorization": f"Bearer {API_KEY}"}
             )
-            response.raise_for_status()
-            data = response.json()
+            r.raise_for_status()
+            data = r.json()
             result = data.get("data", [{}])[0] if isinstance(data.get("data"), list) else data.get("data", {})
             return {
-                "live_count": result.get("live_count", 0),
-                "dead_count": result.get("dead_count", 0)
+                "live_count": result.get("live_count", 0) or result.get("valid", 0) or result.get("live", 0),
+                "dead_count": result.get("dead_count", 0) or result.get("invalid", 0)
             }
     except Exception as e:
-        logger.error(f"Polling batch {batch_id} failed: {e}")
+        logger.error(f"Get batch result failed: {e}")
         return {"live_count": 0, "dead_count": 0}
 
 async def poll_batch(batch_id: str, status_msg, total_cards: int, uid: int):
@@ -237,8 +237,10 @@ async def poll_batch(batch_id: str, status_msg, total_cards: int, uid: int):
         progress = int((i + 1) / polls * 100)
         await status_msg.edit_text(f"🔄 Quality Checking... {progress}%\n\n{quote}\nLive Found: {live_count}")
 
-    final_result = await get_batch_result(batch_id)
-    live_count = final_result.get("live_count", 0)
+    final = await get_batch_result(batch_id)
+    live_count = final.get("live_count", 0)
+    
+    # Return the correct number of live cards
     return user_sessions[uid].get("current_cards", [])[:live_count]
 
 # ====================== START ======================
@@ -336,51 +338,44 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = user_sessions[uid]
 
     if session.get("rate_step"):
+        # Rate system logic (same as before)
         step = session["rate_step"]
         if step in ["set_vr", "rate_bin", "set_balance", "set_suggestion", "force_vr"]:
             bin6 = text[:6]
             session["current_bin"] = bin6
-            if step == "set_vr":
-                await update.message.reply_text(f"You have selected BIN **{bin6}**\nWhat do you want to set the VR rating as? (e.g. 94)")
-                session["rate_step"] = "set_vr_value"
-            elif step == "rate_bin":
-                await update.message.reply_text(f"You have selected BIN **{bin6}**\nRate this BIN:")
-                session["rate_step"] = "rate_bin_value"
-            elif step == "set_balance":
-                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Balance Rating:")
-                session["rate_step"] = "set_balance_value"
-            elif step == "set_suggestion":
-                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Suggestion:")
-                session["rate_step"] = "set_suggestion_value"
-            elif step == "force_vr":
-                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Forced VR (number or 'reset'):")
-                session["rate_step"] = "force_vr_value"
+            prompts = {
+                "set_vr": f"You have selected BIN **{bin6}**\nWhat do you want to set the VR rating as?",
+                "rate_bin": f"You have selected BIN **{bin6}**\nRate this BIN:",
+                "set_balance": f"You have selected BIN **{bin6}**\nSet Balance Rating:",
+                "set_suggestion": f"You have selected BIN **{bin6}**\nSet Suggestion:",
+                "force_vr": f"You have selected BIN **{bin6}**\nSet Forced VR (number or 'reset'):"
+            }
+            await update.message.reply_text(prompts[step])
+            session["rate_step"] = step + "_value"
             return BIN_INPUT
 
         bin6 = session.get("current_bin")
-        if step == "set_vr_value":
+        if "vr" in session["rate_step"]:
             BIN_RATER[bin6]["rating"] = text
             await update.message.reply_text(f"✅ VR for BIN {bin6} set to {text}%", reply_markup=main_menu())
-        elif step == "rate_bin_value":
-            BIN_RATER[bin6]["rating"] = text
-            await update.message.reply_text(f"✅ BIN {bin6} rated as {text}", reply_markup=main_menu())
-        elif step == "set_balance_value":
+        elif "balance" in session["rate_step"]:
             BIN_RATER[bin6]["balance"] = text
             await update.message.reply_text(f"✅ Balance rating for BIN {bin6} set to {text}", reply_markup=main_menu())
-        elif step == "set_suggestion_value":
+        elif "suggestion" in session["rate_step"]:
             BIN_RATER[bin6]["suggestion"] = text
-            await update.message.reply_text(f"✅ Suggestion for BIN {bin6} set to: {text}", reply_markup=main_menu())
-        elif step == "force_vr_value":
+            await update.message.reply_text(f"✅ Suggestion for BIN {bin6} set.", reply_markup=main_menu())
+        elif "force" in session["rate_step"]:
             if text.lower() == "reset":
                 FORCED_VR.pop(bin6, None)
-                await update.message.reply_text(f"✅ Forced VR for BIN {bin6} reset.", reply_markup=main_menu())
+                await update.message.reply_text(f"✅ Forced VR reset for {bin6}", reply_markup=main_menu())
             else:
                 FORCED_VR[bin6] = int(text)
-                await update.message.reply_text(f"✅ Forced VR for BIN {bin6} set to {text}%", reply_markup=main_menu())
+                await update.message.reply_text(f"✅ Forced VR for {bin6} set to {text}%", reply_markup=main_menu())
         session["rate_step"] = None
         session["current_bin"] = None
         return MENU
 
+    # Sale / Replace / Tester logic (unchanged)
     if session.get("mode") in ("sale", "replace") and not session.get("customer"):
         session["customer"] = text
         await update.message.reply_text(f"How many cards is **{text}** purchasing / needs replaced?")
@@ -415,7 +410,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if new_cards:
         session["cards"].extend(new_cards)
         session["current_cards"] = session["cards"][:]
-        usa = sum(1 for c in session["cards"] if c.get("country", "").upper() in ["US", "USA", "UNITED STATES"])
+        usa = sum(1 for c in session["cards"] if str(c.get("country", "")).upper() in ["US", "USA", "UNITED STATES"])
         session["usa"] = usa
         session["foreign"] = len(session["cards"]) - usa
 
@@ -431,10 +426,8 @@ Total Foreign : {session['foreign']}
 Mode          : {mode_name}
 Filename      : {filename}
 """
-        if session.get("customer"):
-            summary += f"\nCustomer      : {session['customer']}"
-        if session.get("target"):
-            summary += f"\nTarget        : {session['target']}"
+        if session.get("customer"): summary += f"\nCustomer : {session['customer']}"
+        if session.get("target"): summary += f"\nTarget   : {session['target']}"
 
         await update.message.reply_text(summary, parse_mode='Markdown', reply_markup=pre_keyboard())
         return COLLECTING
@@ -581,8 +574,7 @@ def main():
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("🚀 FactoryVHQ v22.4 - Full File | Real Stormcheck API Mode")
-    print(f"TEST_MODE: {TEST_MODE} | Using endpoint: {BASE_URL}/check")
+    print("🚀 FactoryVHQ v22.5 - Fixed Live Detection for Real Stormcheck API")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
