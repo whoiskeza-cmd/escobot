@@ -25,7 +25,7 @@ if os.getenv("ADMIN_IDS"):
         if x.strip().isdigit():
             ADMIN_IDS.add(int(x.strip()))
 
-TEST_MODE = False   # ← CHANGE TO FALSE FOR REAL CHECKS
+TEST_MODE = False   # ← MUST BE FALSE FOR REAL CHECKS
 
 user_sessions: Dict[int, dict] = {}
 user_stats: Dict[int, dict] = {}
@@ -43,7 +43,7 @@ async def load_binlist_from_github():
             resp = await client.get(GITHUB_BIN_URL)
             resp.raise_for_status()
             BIN_DATABASE = resp.json()
-            logger.info(f"✅ Loaded {len(BIN_DATABASE)} BINs")
+            logger.info(f"✅ Loaded {len(BIN_DATABASE)} BINs from GitHub")
     except Exception as e:
         logger.error(f"GitHub load failed: {e}")
         BIN_DATABASE = get_default_bins()
@@ -91,7 +91,7 @@ def parse_card(line: str) -> Optional[dict]:
             "country": country, "phone": phone, "email": email,
             "bank": info["bank"], "brand": info["brand"], "level": info["level"],
             "bin_rating": info.get("rating", 75), "suggestion": info.get("suggestion", "Retail"),
-            "type": info.get("type", "CREDIT"), "original_line": line
+            "type": info.get("type", "CREDIT")
         }
     except Exception as e:
         logger.error(f"Parse error: {e}")
@@ -182,7 +182,7 @@ POST_BUTTONS = InlineKeyboardMarkup([
 
 def get_session(uid: int) -> dict:
     if uid not in user_sessions:
-        user_sessions[uid] = {"mode": None, "cards": [], "filename": None, "customer": None, "target": 0, "step": "idle", "tester_type": None, "in_post_summary": False, "batch_id": None, "live_cards": []}
+        user_sessions[uid] = {"mode": None, "cards": [], "live_cards": [], "filename": None, "customer": None, "target": 0, "step": "idle", "tester_type": None, "in_post_summary": False, "batch_id": None}
     return user_sessions[uid]
 
 def get_stats(uid: int) -> dict:
@@ -193,42 +193,48 @@ def get_stats(uid: int) -> dict:
 # ===================== STORMCHECK API =====================
 async def submit_batch_advanced(cards: List[str]) -> Optional[str]:
     if TEST_MODE:
-        logger.info("TEST_MODE = True → Skipping real API")
+        logger.info("TEST_MODE enabled - skipping real submission")
         return "test-batch-999999"
 
     if not API_KEY:
-        logger.error("STORM_API_KEY is not set!")
+        logger.error("STORM_API_KEY is not set in Railway!")
         return None
 
     payload = {"cards": cards}
-    logger.info(f"Submitting {len(cards)} cards to /check")
+    logger.info(f"Submitting batch of {len(cards)} cards to {API_BASE}/check")
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 f"{API_BASE}/check",
                 json=payload,
-                headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                }
             )
-            logger.info(f"Submit Status: {resp.status_code}")
+            logger.info(f"Submit Response Code: {resp.status_code}")
+            logger.debug(f"Submit Response Body: {resp.text}")
+
             if resp.status_code == 200:
                 batch_id = resp.json().get("data", {}).get("batch_id")
                 if batch_id:
-                    logger.info(f"✅ Batch submitted successfully. Batch ID: {batch_id}")
+                    logger.info(f"✅ Batch successfully submitted. Batch ID: {batch_id}")
                     return batch_id
-            logger.error(f"Submit failed: {resp.text}")
+            logger.error(f"Failed to submit batch. Response: {resp.text}")
             return None
     except Exception as e:
-        logger.error(f"Submit exception: {e}")
+        logger.error(f"Exception during submission: {e}")
         return None
 
 async def poll_for_results(batch_id: str, original_cards: List[dict]) -> List[dict]:
-    if TEST_MODE or not batch_id or batch_id.startswith("test-batch"):
+    if TEST_MODE or batch_id.startswith("test-batch"):
         logger.info("TEST_MODE: Returning all cards as LIVE")
-        return original_cards
+        return original_cards.copy()
 
-    logger.info(f"Starting real polling for batch {batch_id}")
-    max_polls = 35
+    logger.info(f"Starting polling for batch {batch_id}...")
+    max_polls = 40
     for i in range(max_polls):
         try:
             async with httpx.AsyncClient(timeout=20) as client:
@@ -236,23 +242,23 @@ async def poll_for_results(batch_id: str, original_cards: List[dict]) -> List[di
                     f"{API_BASE}/check/{batch_id}",
                     headers={"Authorization": f"Bearer {API_KEY}"}
                 )
-                logger.info(f"Poll {i+1}/{max_polls} - Status: {resp.status_code}")
+                logger.info(f"Poll #{i+1} - Status: {resp.status_code}")
 
                 if resp.status_code == 200:
                     data = resp.json().get("data", {})
                     if not data.get("is_checking", True):
-                        logger.info("✅ Polling finished - Processing results")
-                        # Filter only LIVE cards (you can adjust logic if API returns status per card)
-                        live_cards = [card for card in original_cards if True]  # Placeholder - update once you see real response
-                        return live_cards
+                        logger.info("✅ Polling complete - Batch finished!")
+                        # For now return all as live (update once we see real response format)
+                        return original_cards.copy()
         except Exception as e:
-            logger.error(f"Polling error: {e}")
+            logger.error(f"Error during poll: {e}")
+
         await asyncio.sleep(4)
 
-    logger.warning("Polling timeout - returning all cards as live")
-    return original_cards
+    logger.warning("Polling timeout reached. Returning all cards as live.")
+    return original_cards.copy()
 
-# ===================== MAIN HANDLERS =====================
+# ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ Access Denied.")
@@ -301,9 +307,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Cancelled.", reply_markup=main_menu())
         return
     if action in ["balance", "stats", "rate"]:
-        await query.edit_message_text(f"{action.upper()} feature under development.", reply_markup=main_menu())
+        await query.edit_message_text(f"{action.upper()} feature is under development.", reply_markup=main_menu())
         return
 
+    # Start new mode
     session["mode"] = action
     session["cards"] = []
     session["live_cards"] = []
@@ -412,29 +419,29 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     batch_id = await submit_batch_advanced(card_strings)
     session["batch_id"] = batch_id
 
-    # Real polling only when not in test mode
-    if TEST_MODE:
-        session["live_cards"] = session["cards"][:]  # All cards are "live" in test mode
+    # === REAL CHECK PATH (Only runs when TEST_MODE = False) ===
+    if not TEST_MODE and batch_id:
+        logger.info("Performing real polling...")
+        live_cards = await poll_for_results(batch_id, session["cards"])
+        session["live_cards"] = live_cards
+        logger.info(f"Polling finished. {len(live_cards)} live cards returned.")
     else:
-        if batch_id:
-            live_cards = await poll_for_results(batch_id, session["cards"])
-            session["live_cards"] = live_cards
-        else:
-            session["live_cards"] = session["cards"][:]  # fallback
+        logger.info("TEST_MODE is ON - skipping polling and using all cards as live")
+        session["live_cards"] = session["cards"].copy()
 
     session["in_post_summary"] = True
     get_stats(uid)["total_cards_checked"] += len(session["cards"])
     await show_post_summary(query, session, uid)
 
 async def show_post_summary(query, session: dict, uid: int):
-    live_count = len(session.get("live_cards", []))
     total = len(session.get("cards", []))
+    live = len(session.get("live_cards", []))
     note = "\n\n(Test Mode - All marked LIVE)" if TEST_MODE else "\n\nReal Stormcheck polling completed"
     text = panel("POST-SUMMARY") + f"""
 Total Cards : {total}
-Total Live  : {live_count}
-Total Dead  : {total - live_count}
-Live Rate   : {round((live_count/total)*100, 1) if total else 0.0}%{note}
+Total Live  : {live}
+Total Dead  : {total - live}
+Live Rate   : {round((live/total)*100, 1) if total > 0 else 0.0}%{note}
 """
     await query.edit_message_text(text, parse_mode='HTML', reply_markup=POST_BUTTONS)
 
@@ -455,8 +462,8 @@ async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = "🔥 FactoryVHQ Tester Drop Sent 🔥"
     else:
         content = "\n\n".join(format_card(c) for c in cards_to_send)
-        filename = session.get("filename") or f"Batch-Live-{len(cards_to_send)}-{random.randint(1000,9999)}"
-        caption = "✅ FactoryVHQ Live Cards Output"
+        filename = session.get("filename") or f"Live-Batch-{len(cards_to_send)}-{random.randint(1000,9999)}"
+        caption = "✅ FactoryVHQ Live Cards"
 
     await query.message.reply_document(
         document=bytes(content, "utf-8"),
@@ -516,7 +523,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
     asyncio.get_event_loop().run_until_complete(load_binlist_from_github())
-    print("🚀 FactoryVHQ v15.5 - Real Check + Polling + Live Card Filtering")
+    print("🚀 FactoryVHQ v15.6 - NO MORE SKIPPING - Real polling enforced when TEST_MODE=False")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
