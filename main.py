@@ -132,7 +132,8 @@ def parse_card(line: str) -> Optional[dict]:
             "email": parts[11].strip() if len(parts) > 11 else "N/A",
             "raw": f"{card}|{parts[1].strip().zfill(2)}|{parts[2].strip()[-2:].zfill(2)}|{re.sub(r'\D', '', parts[3]) or '000'}"
         }
-    except:
+    except Exception as e:
+        logger.error(f"Parse failed: {line}")
         return None
 
 def get_bin_info(card: str):
@@ -183,7 +184,7 @@ def format_live_card(card: dict, is_tester: bool = False, forced_vr: Optional[in
         lines.append("❤️ Thank You For Choosing FactoryVHQ ❤️")
     return "\n".join(lines)
 
-# ====================== IMPROVED API HANDLING ======================
+# ====================== FIXED BATCH ID + STATUS: LIVE SCAN ======================
 async def submit_to_storm(cards: List[str]):
     if TEST_MODE: return "test-batch-999999"
     try:
@@ -194,14 +195,16 @@ async def submit_to_storm(cards: List[str]):
             r.raise_for_status()
             data = r.json()
             batch = data.get("data", [{}])[0] if isinstance(data.get("data"), list) else data.get("data", {})
-            return batch.get("id") or batch.get("batch_id")
+            batch_id = batch.get("id") or batch.get("batch_id")
+            logger.info(f"Batch submitted successfully. Batch ID: {batch_id}")
+            return batch_id
     except Exception as e:
         logger.error(f"Submit failed: {e}")
         return None
 
 async def get_batch_result(batch_id: str):
     if TEST_MODE or not batch_id:
-        return {"live_count": 1, "items": [{"card": "4111111111111111", "status": "live"}]}
+        return {"live_count": 1, "items": [{"card": "5217295432071383", "status": "live"}]}
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.get(f"{BASE_URL}/check/{batch_id}",
@@ -209,20 +212,18 @@ async def get_batch_result(batch_id: str):
             r.raise_for_status()
             data = r.json()
             result = data.get("data", [{}])[0] if isinstance(data.get("data"), list) else data.get("data", {})
-            return {
-                "live_count": result.get("live_count", 0),
-                "items": result.get("items", [])
-            }
+            live_count = result.get("live_count", 0)
+            items = result.get("items", [])
+            logger.info(f"Batch {batch_id} returned live_count: {live_count} | items: {len(items)}")
+            return {"live_count": live_count, "items": items}
     except Exception as e:
         logger.error(f"Get batch result failed: {e}")
         return {"live_count": 0, "items": []}
 
 async def poll_batch(batch_id: str, status_msg, total_cards: int, uid: int):
-    if total_cards <= 5: polls, delay = 4, 15
-    elif total_cards <= 10: polls, delay = 6, 18
-    elif total_cards <= 15: polls, delay = 9, 20
-    elif total_cards <= 30: polls, delay = 12, 22
-    else: polls, delay = 16, 25
+    if total_cards <= 5: polls, delay = 5, 12
+    elif total_cards <= 10: polls, delay = 7, 15
+    else: polls, delay = 10, 18
 
     for i in range(polls):
         await asyncio.sleep(delay)
@@ -233,18 +234,19 @@ async def poll_batch(batch_id: str, status_msg, total_cards: int, uid: int):
         await status_msg.edit_text(f"🔄 Quality Checking... {progress}%\n\n{quote}\nLive Found: {live_count}")
 
     final = await get_batch_result(batch_id)
-    live_items = [item for item in final.get("items", []) if item.get("status", "").lower() == "live"]
-    
+    live_items = [item for item in final.get("items", []) if str(item.get("status", "")).lower() == "live"]
+
     current_cards = user_sessions[uid].get("current_cards", [])
     live_cards = []
-    
+
     for item in live_items:
-        card_num = item.get("card", "")[:16]
+        card_num = str(item.get("card", ""))[:16]
         for card in current_cards:
             if card["card"] == card_num:
                 live_cards.append(card)
                 break
 
+    logger.info(f"Final live cards matched: {len(live_cards)} out of {len(live_items)} reported live")
     return live_cards
 
 # ====================== START ======================
@@ -271,7 +273,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Cancelled. Returning to Admin Panel.", reply_markup=main_menu())
     return MENU
 
-# ====================== BUTTON & MESSAGE HANDLERS (unchanged from previous) ======================
+# ====================== BUTTON HANDLER ======================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -334,6 +336,7 @@ Replacements   : {s['replacements']}
     await handle_action(update, context, data)
     return MENU
 
+# ====================== MESSAGE HANDLER ======================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in AUTHORIZED_USERS: return
@@ -435,7 +438,7 @@ Filename      : {filename}
 
     await update.message.reply_text("No valid cards detected.")
 
-# ====================== ACTION HANDLER (Updated for live_count) ======================
+# ====================== ACTION HANDLER ======================
 async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
     query = update.callback_query
     uid = query.from_user.id
@@ -450,7 +453,7 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
 
         card_list = [c["raw"] for c in session["cards"]]
         batch_id = await submit_to_storm(card_list)
-        await msg.edit_text("✅ Batch submitted successfully.\nStarting Quality Checking...")
+        await msg.edit_text(f"✅ Batch submitted successfully.\nBatch ID: `{batch_id}`\nStarting Quality Checking...", parse_mode='Markdown')
 
         live_cards = await poll_batch(batch_id, msg, len(card_list), uid)
         session["live_cards"] = live_cards
@@ -575,7 +578,7 @@ def main():
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("🚀 FactoryVHQ v22.7 - Now using live_count + status:'live' scanning")
+    print("🚀 FactoryVHQ v22.8 - Using Batch ID + status:'live' scanning")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
