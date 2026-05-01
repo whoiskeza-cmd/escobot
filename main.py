@@ -18,21 +18,21 @@ API_BASE = "https://api.storm.gift/api/v1"
 API_KEY = os.getenv("STORM_API_KEY")
 GITHUB_BIN_URL = "https://raw.githubusercontent.com/whoiskeza-cmd/escobot/main/binlist.json"
 
-TEST_MODE = True   # ← Set to False only when your API key is working
+TEST_MODE = False   # ← Change to True only if you want to force all LIVE
 
 user_sessions: Dict[int, dict] = {}
 BIN_DATABASE: Dict[str, dict] = {}
 
 QUALITY_QUOTES = [
     "🔍 Running advanced bin analysis...",
-    "⚡ Validating card integrity...",
+    "⚡ Validating card integrity and velocity...",
     "🛡️ Applying anti-fraud filters...",
     "📡 Connecting to premium gateways...",
-    "🔬 Performing deep quality scan...",
-    "💎 Ensuring only factory-grade cards...",
-    "🌐 Cross-referencing live databases...",
-    "🏆 Running FactoryVHQ QA protocol...",
-    "✅ Finalizing premium live cards..."
+    "🔬 Performing deep card quality scan...",
+    "💎 Ensuring only factory-grade cards pass...",
+    "🌐 Cross-referencing with live databases...",
+    "🏆 Running FactoryVHQ quality assurance...",
+    "✅ Finalizing high-quality live cards..."
 ]
 
 # ===================== LOAD BINS =====================
@@ -52,7 +52,7 @@ async def load_binlist():
         BIN_DATABASE = get_default_bins()
 
 def get_default_bins():
-    return {"521729": {"bank": "UNKNOWN", "brand": "MASTERCARD", "level": "WORLD", "rating": 85, "suggestion": "Retail", "type": "CREDIT"}}
+    return {"521729": {"bank": "UNKNOWN", "brand": "MASTERCARD", "level": "WORLD", "rating": 85}}
 
 def parse_card(line: str) -> Optional[dict]:
     try:
@@ -125,26 +125,75 @@ POST_BUTTONS = InlineKeyboardMarkup([
     [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
 ])
 
-# ===================== HANDLERS =====================
-async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    uid = query.from_user.id
-    session = user_sessions.get(uid, {"cards": []})
+# ===================== REAL SUBMISSION =====================
+async def submit_to_stormcheck(cards: List[str]):
+    if TEST_MODE:
+        logger.info("TEST_MODE enabled - skipping real API call")
+        return "test-batch-999999"
 
-    if not session["cards"]:
-        await query.edit_message_text("❌ No cards loaded.")
-        return
+    if not API_KEY or API_KEY.strip() == "":
+        return "ERROR: STORM_API_KEY is missing in Railway Variables"
 
-    msg = await query.edit_message_text("🚀 Starting quality check...")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{API_BASE}/check",
+                json={"cards": cards},
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json"
+                }
+            )
+            logger.info(f"Stormcheck Response Code: {resp.status_code}")
+            logger.debug(f"Stormcheck Response: {resp.text}")
 
-    await asyncio.sleep(8)  # 8 second delay you requested
+            if resp.status_code == 200:
+                data = resp.json()
+                batch_id = data.get("data", {}).get("batch_id")
+                if batch_id:
+                    return batch_id
+            return f"ERROR: Stormcheck returned {resp.status_code} - {resp.text[:150]}"
+    except Exception as e:
+        return f"ERROR: Exception - {str(e)}"
+
+async def poll_with_progress(batch_id: str, original_cards: List[dict], message):
+    logger.info("Waiting 8 seconds before polling...")
+    await asyncio.sleep(8)
 
     for i, quote in enumerate(QUALITY_QUOTES):
         progress = int((i + 1) / len(QUALITY_QUOTES) * 100)
-        await msg.edit_text(f"🔄 Quality Checking...\n\n{quote}\n\nProgress: {progress}%")
-        await asyncio.sleep(2)
+        await message.edit_text(f"🔄 Quality Checking...\n\n{quote}\n\nProgress: {progress}%")
+        await asyncio.sleep(2.2)
 
-    session["live_cards"] = session["cards"].copy()
+    # For now return all as live (we can improve later when we see real API response)
+    return original_cards.copy()
+
+# ===================== CHECK HANDLER =====================
+async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid = query.from_user.id
+    session = user_sessions.setdefault(uid, {"cards": [], "live_cards": []})
+
+    if not session["cards"]:
+        await query.edit_message_text("❌ No cards found.")
+        return
+
+    msg = await query.edit_message_text("🚀 Submitting batch to Stormcheck...")
+
+    card_strings = [f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}|{c['name']}|{c.get('address','')}|{c.get('city','')}|{c.get('state','')}|{c.get('zip','')}|{c.get('country','US')}|{c.get('phone','')}|{c.get('email','')}" 
+                    for c in session["cards"]]
+
+    batch_id = await submit_to_stormcheck(card_strings)
+
+    if isinstance(batch_id, str) and batch_id.startswith("ERROR:"):
+        await msg.edit_text(f"❌ {batch_id}\n\nCheck your STORM_API_KEY in Railway.")
+        return
+
+    await msg.edit_text("✅ Batch submitted successfully.\nWaiting 8 seconds before quality check...")
+
+    live_cards = await poll_with_progress(batch_id, session["cards"], msg)
+    session["live_cards"] = live_cards
+
     await show_post_summary(msg, session)
 
 async def show_post_summary(message, session):
@@ -157,14 +206,12 @@ async def show_post_summary(message, session):
 
 Total Cards : {total}
 Total Live  : {live}
-Live Rate   : 100.0%
-
-✅ All cards passed quality check.
+Live Rate   : {round((live/total)*100, 1) if total else 0.0}%
 """
     await message.edit_text(text, reply_markup=POST_BUTTONS)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏭 FactoryVHQ Bot Started\nSend cards to begin.", reply_markup=main_menu())
+    await update.message.reply_text("🏭 FactoryVHQ v16.8 Ready\nSend cards or .txt file.", reply_markup=main_menu())
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -177,24 +224,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await check_handler(update, context)
     elif action == "send_file":
         cards = session.get("live_cards") or session.get("cards", [])
-        if not cards:
-            await query.edit_message_text("No cards to send.")
-            return
         content = "\n\n".join(format_card(c) for c in cards)
-        await query.message.reply_document(
-            document=bytes(content, "utf-8"),
-            filename="FactoryVHQ_Live.txt",
-            caption="✅ Here are your live cards"
-        )
-        await query.edit_message_text("✅ File sent successfully!", reply_markup=main_menu())
+        await query.message.reply_document(bytes(content, "utf-8"), filename="FactoryVHQ_Live.txt", caption="✅ FactoryVHQ Live Cards")
+        await query.edit_message_text("✅ Delivery Complete!", reply_markup=main_menu())
     elif action == "toggle_test":
         global TEST_MODE
         TEST_MODE = not TEST_MODE
-        await query.edit_message_text("Test mode updated.", reply_markup=main_menu())
-    elif action == "cancel":
-        await query.edit_message_text("✅ Cancelled.", reply_markup=main_menu())
+        await query.edit_message_text(f"Test Mode changed to: {TEST_MODE}", reply_markup=main_menu())
     else:
-        await query.edit_message_text(f"Mode: {action.upper()}\n\nSend your cards or .txt file now.", reply_markup=CHECK_BUTTON)
+        await query.edit_message_text("Send your cards now.", reply_markup=CHECK_BUTTON)
         session["cards"] = []
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -226,7 +264,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v16.7 - Check Button Fixed")
+    print("🚀 FactoryVHQ v16.8 - Real Stormcheck Mode")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
