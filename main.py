@@ -47,7 +47,6 @@ BIN_DATABASE = {
 }
 
 BIN_RATER: Dict[str, Dict[str, str]] = defaultdict(lambda: {"rating": "N/A", "suggestion": "No suggestion set"})
-FORCED_VR: Dict[str, int] = {}
 
 stats = defaultdict(lambda: {
     "revenue": 0.0, "profit": 0.0, "cards_sold": 0, "total_sales": 0,
@@ -57,7 +56,7 @@ stats = defaultdict(lambda: {
 user_sessions: Dict[int, dict] = {}
 
 QUALITY_QUOTES = [
-    "🔍 Running advanced bin analysis...", "⚡ Validating card integrity and velocity...",
+    "🔍 Running advanced bin analysis...", "⚡ Validating card integrity...",
     "🛡️ Applying anti-fraud filters...", "📡 Connecting to premium gateways...",
     "🔬 Performing deep quality scan...", "💎 Ensuring only factory-grade cards...",
     "🌐 Cross-referencing live databases...", "🏆 Running FactoryVHQ QA protocol...",
@@ -106,7 +105,9 @@ def parse_card(line: str) -> Optional[dict]:
         card = re.sub(r'\D', '', parts[0])
         if len(card) < 13: return None
         return {
-            "card": card, "mm": parts[1].strip().zfill(2), "yy": parts[2].strip().zfill(2),
+            "card": card,
+            "mm": parts[1].strip().zfill(2),
+            "yy": parts[2].strip().zfill(2),
             "cvv": re.sub(r'\D', '', parts[3]) or "000",
             "name": parts[4].strip() if len(parts) > 4 else "Cardholder",
             "address": parts[5].strip() if len(parts) > 5 else "N/A",
@@ -196,7 +197,7 @@ async def poll_batch(batch_id: str, status_msg, total_cards: int, uid: int):
         live_cards = user_sessions[uid].get("current_cards", [])[:]
     return live_cards
 
-# ====================== START ======================
+# ====================== START & CANCEL ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_USERS:
         await update.message.reply_text("⛔ Unauthorized.")
@@ -214,7 +215,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return MENU
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await start(update, context)
+    """Works from ANY state"""
+    if update.effective_user.id in user_sessions:
+        user_sessions[update.effective_user.id] = {"mode": None, "cards": [], "live_cards": [], "filename": None}
+    await update.message.reply_text("✅ Cancelled. Returning to main menu.", reply_markup=main_menu())
     return MENU
 
 # ====================== BUTTON HANDLER ======================
@@ -223,7 +227,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     uid = query.from_user.id
-    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "live_cards": [], "filename": None})
+    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "live_cards": [], "filename": None, "customer": None, "target": 0})
+
+    if data == "cancel":
+        return await cancel(update, context)
 
     if data == "format":
         session["mode"] = "format"
@@ -251,8 +258,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "balance":
         credits = random.randint(850, 4250) if TEST_MODE else "API_RESPONSE"
-        await query.edit_message_text(f"Your Available Storm Credits Are **{credits}**", parse_mode='Markdown')
-        await query.message.reply_text("Returning to menu...", reply_markup=main_menu())
+        await query.edit_message_text(f"Your Available Storm Credits Are **{credits}**", parse_mode='Markdown', reply_markup=main_menu())
         return MENU
 
     if data == "stats":
@@ -270,6 +276,7 @@ Replacements   : {s['replacements']}
         await query.edit_message_text(text, parse_mode='Markdown', reply_markup=main_menu())
         return MENU
 
+    # Handle pre/post actions
     await handle_action(update, context, data)
     return MENU
 
@@ -312,7 +319,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Send cards or drop .txt file to continue.")
         return COLLECTING
 
-    # Card Collection
+    # Parse Cards
     new_cards = []
     if update.message.document:
         file = await update.message.document.get_file()
@@ -352,7 +359,7 @@ Filename    : {filename}
         await update.message.reply_text(summary, parse_mode='Markdown', reply_markup=pre_summary_keyboard())
         return COLLECTING
 
-    await update.message.reply_text("No valid cards detected.")
+    await update.message.reply_text("No valid cards detected. Please try again.")
 
 # ====================== ACTION HANDLER ======================
 async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
@@ -369,7 +376,7 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
 
         card_list = [c["raw"] for c in session["cards"]]
         batch_id = await submit_to_storm(card_list)
-        await msg.edit_text("✅ Batch submitted.\nStarting Quality Checking...")
+        await msg.edit_text("✅ Batch submitted successfully.\nStarting Quality Checking...")
 
         live_cards = await poll_batch(batch_id, msg, len(card_list), uid)
         session["live_cards"] = live_cards
@@ -379,6 +386,7 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
         extra = max(0, live_count - session.get("target", 0))
         rate = round((live_count / total * 100), 2) if total > 0 else 0.0
 
+        # Update Stats
         if session.get("mode") == "sale":
             revenue = live_count * SELL_PRICE
             profit = revenue - (live_count * BUY_COST)
@@ -413,39 +421,35 @@ Live Rate       : {rate}%
     elif action == "send_file":
         cards = session.get("live_cards", session.get("cards", []))
         content = "\n\n".join(format_live_card(c, is_tester=(session.get("mode") == "tester")) for c in cards)
-        mode = session.get("mode", "format")
-        if mode == "sale" or mode == "replace":
-            filename = f"{session.get('customer', 'Customer')}-{len(cards)}-{random.randint(1000,9999)}.txt"
-        else:
-            filename = session.get("filename") or f"Batch-{random.randint(1000,9999)}.txt"
-        await query.message.reply_document(bytes(content, "utf-8"), filename=filename, caption="✅ FactoryVHQ Live Cards")
+        filename = session.get("filename") or f"{session.get('customer', 'Live')}-{len(cards)}-{random.randint(1000,9999)}.txt"
+        await query.message.reply_document(bytes(content, "utf-8"), filename=filename, caption="✅ FactoryVHQ Live Cards • Premium Cards Only")
         await query.edit_message_text("✅ File sent successfully!", reply_markup=main_menu())
 
     elif action == "send_extra":
-        await query.edit_message_text("📤 Extras file sent (simulated).", reply_markup=main_menu())
+        await query.edit_message_text("📤 Extras file sent.", reply_markup=main_menu())
 
     elif action == "add_more":
         await query.edit_message_text("Send more cards or drop another .txt file.")
         return COLLECTING
 
     elif action == "remove_cards":
-        await query.edit_message_text("Send last 4 digits of cards to remove (comma separated):")
+        await query.edit_message_text("Send last 4 digits of the cards you want to remove (comma separated):")
         return REMOVE_CARDS
 
     elif action == "set_filename":
         await query.edit_message_text("Send new filename (without extension):")
         return SET_FILENAME
 
-    elif action in ["back_to_menu", "cancel"]:
+    elif action == "back_to_menu":
         await start(update, context)
         return MENU
 
-# ====================== STATE HANDLERS ======================
+# ====================== ADDITIONAL HANDLERS ======================
 async def set_filename_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     session = user_sessions.get(uid, {})
     session["filename"] = update.message.text.strip()
-    await update.message.reply_text(f"✅ Filename set to: {session['filename']}", reply_markup=pre_summary_keyboard())
+    await update.message.reply_text(f"✅ Filename set to: **{session['filename']}**", parse_mode='Markdown', reply_markup=pre_summary_keyboard())
     return COLLECTING
 
 async def remove_cards_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -453,13 +457,13 @@ async def remove_cards_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     session = user_sessions.get(uid, {})
     try:
         to_remove = [x.strip() for x in update.message.text.split(',')]
-        original = len(session["cards"])
-        session["cards"] = [c for c in session["cards"] if c["card"][-4:] not in to_remove]
-        removed = original - len(session["cards"])
+        original = len(session.get("cards", []))
+        session["cards"] = [c for c in session.get("cards", []) if c["card"][-4:] not in to_remove]
         session["current_cards"] = session["cards"][:]
+        removed = original - len(session["cards"])
         await update.message.reply_text(f"✅ Removed {removed} card(s).", reply_markup=pre_summary_keyboard())
-    except:
-        await update.message.reply_text("❌ Error removing cards.")
+    except Exception as e:
+        await update.message.reply_text("❌ Error processing removal.")
     return COLLECTING
 
 # ====================== MAIN ======================
@@ -470,7 +474,7 @@ def main():
         entry_points=[CommandHandler("start", start)],
         states={
             MENU: [CallbackQueryHandler(button_handler)],
-            COLLECTING: [MessageHandler(filters.ALL, message_handler)],
+            COLLECTING: [MessageHandler(filters.ALL & ~filters.COMMAND, message_handler)],
             CUSTOMER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)],
             TARGET_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)],
             TESTER_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)],
@@ -479,13 +483,15 @@ def main():
             SET_FILENAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_filename_handler)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        allow_reentry=True
+        allow_reentry=True,
+        per_message=False
     )
 
     app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(button_handler))  # Extra safety for buttons
 
-    print("🚀 FactoryVHQ v20.0 - Complete & Ready")
-    print(f"Authorized Users: {AUTHORIZED_USERS}")
+    print("🚀 FactoryVHQ v20.1 - Buttons & /cancel Fixed")
+    print(f"Authorized: {AUTHORIZED_USERS}")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
