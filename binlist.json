@@ -1,0 +1,146 @@
+{
+  "400022": {
+    "bank": "NAVY FEDERAL CREDIT UNION",
+    "brand": "VISA",
+    "level": "CLASSIC",
+    "rating": 85,
+    "suggestion": "Military & General Use",
+    "type": "DEBIT"
+  },
+  "410039": {
+    "bank": "CITIBANK, N.A.- COSTCO",
+    "brand": "VISA",
+    "level": "TRADITIONAL",
+    "rating": 92,
+    "suggestion": "Amazon, Walmart, High Value",
+    "type": "CREDIT"
+  },
+  "410040": {
+    "bank": "CITIBANK, N.A.- COSTCO",
+    "brand": "VISA",
+    "level": "BUSINESS",
+    "rating": 88,
+    "suggestion": "Business & High Limits",
+    "type": "CREDIT"
+  },
+  "414720": {
+    "bank": "JPMORGAN CHASE BANK N.A.",
+    "brand": "VISA",
+    "level": "TRADITIONAL",
+    "rating": 94,
+    "suggestion": "Everywhere, Very Strong",
+    "type": "CREDIT"
+  },
+  "414740": {
+    "bank": "JPMORGAN CHASE BANK N.A.",
+    "brand": "VISA",
+    "level": "TRADITIONAL",
+    "rating": 91,
+    "suggestion": "Retail & General",
+    "type": "CREDIT"
+  },
+  "434256": {
+    "bank": "WELLS FARGO BANK, NATIONAL ASSOCIATION",
+    "brand": "VISA",
+    "level": "CLASSIC",
+    "rating": 82,
+    "suggestion": "Everyday Use",
+    "type": "DEBIT"
+  },
+  "434769": {
+    "bank": "JPMORGAN CHASE BANK N.A. - DEBIT",
+    "brand": "VISA",
+    "level": "CLASSIC",
+    "rating": 78,
+    "suggestion": "Low Risk Debit",
+    "type": "DEBIT"
+  },
+  "440066": {
+    "bank": "BANK OF AMERICA - CONSUMER CREDIT",
+    "brand": "VISA",
+    "level": "TRADITIONAL",
+    "rating": 89,
+    "suggestion": "General & Retail",
+    "type": "CREDIT"
+  },
+  "483312": {
+    "bank": "JPMORGAN CHASE BANK N.A. - DEBIT",
+    "brand": "VISA",
+    "level": "CLASSIC",
+    "rating": 75,
+    "suggestion": "Debit - Safe",
+    "type": "DEBIT"
+  },
+  "483316": {
+    "bank": "JPMORGAN CHASE BANK N.A. - DEBIT",
+    "brand": "VISA",
+    "level": "CLASSIC",
+    "rating": 76,
+    "suggestion": "Debit - Safe",
+    "type": "DEBIT"
+  },
+  "513379": {
+    "bank": "BANQUE FEDERATIVE DU CREDIT MUTUEL (BFCM)",
+    "brand": "MASTERCARD",
+    "level": "STANDARD",
+    "rating": 80,
+    "suggestion": "France Retail",
+    "type": "DEBIT"
+  },
+  "513646": {
+    "bank": "BANQUE FEDERATIVE DU CREDIT MUTUEL (BFCM)",
+    "brand": "MASTERCARD",
+    "level": "STANDARD",
+    "rating": 79,
+    "suggestion": "France Retail",
+    "type": "DEBIT"
+  },
+  "513647": {
+    "bank": "BANQUE FEDERATIVE DU CREDIT MUTUEL (BFCM)",
+    "brand": "MASTERCARD",
+    "level": "STANDARD",
+    "rating": 79,
+    "suggestion": "France Retail",
+    "type": "DEBIT"
+  },
+  "515676": {
+    "bank": "CAPITAL ONE, NATIONAL ASSOCIATION",
+    "brand": "MASTERCARD",
+    "level": "WORLD ELITE",
+    "rating": 93,
+    "suggestion": "High Value / Luxury",
+    "type": "CREDIT"
+  },
+  "521729": {
+    "bank": "COMMONWEALTH BANK OF AUSTRALIA",
+    "brand": "MASTERCARD",
+    "level": "STANDARD",
+    "rating": 85,
+    "suggestion": "Australia General",
+    "type": "DEBIT"
+  },
+  "531260": {
+    "bank": "BANK OF AMERICA, NATIONAL ASSOCIATION",
+    "brand": "MASTERCARD",
+    "level": "ENHANCED",
+    "rating": 87,
+    "suggestion": "Retail & Travel",
+    "type": "DEBIT"
+  },
+  "534348": {
+    "bank": "CELTIC BANK CORPORATION",
+    "brand": "MASTERCARD",
+    "level": "PLATINUM",
+    "rating": 90,
+    "suggestion": "US Retail & High Limits",
+    "type": "CREDIT"
+  },
+  "542418": {
+    "bank": "CITIBANK N.A.",
+    "brand": "MASTERCARD",
+    "level": "PLATINUM",
+    "rating": 92,
+    "suggestion": "High Value",
+    "type": "CREDIT"
+  }
+}
