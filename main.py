@@ -262,9 +262,12 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v16.5 - Event Loop Fixed (Correct Structure)")
+    print("🚀 FactoryVHQ v16.6 - Fixed for Railway/Python 3.13")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    asyncio.run(load_binlist())
-    main()
+    # Fixed structure for Railway
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(load_binlist())
+    loop.run_until_complete(main())   # This was the missing piece
