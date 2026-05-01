@@ -65,10 +65,10 @@ def parse_card(line: str) -> Optional[dict]:
         cvv = re.sub(r'\D', '', parts[2]) or "000"
         name = parts[3].strip() or "Cardholder"
 
-        address = parts[4].strip() if len(parts) > 4 else ""
-        city = parts[5].strip() if len(parts) > 5 else ""
-        state = parts[6].strip() if len(parts) > 6 else ""
-        zipcode = parts[7].strip() if len(parts) > 7 else ""
+        address = parts[4].strip() if len(parts) > 4 else "N/A"
+        city = parts[5].strip() if len(parts) > 5 else "N/A"
+        state = parts[6].strip() if len(parts) > 6 else "N/A"
+        zipcode = parts[7].strip() if len(parts) > 7 else "N/A"
         country = parts[8].strip() if len(parts) > 8 else "US"
 
         return {
@@ -108,10 +108,11 @@ POST_BUTTONS = InlineKeyboardMarkup([
 
 async def submit_to_stormcheck(cards: List[str]):
     if TEST_MODE:
+        logger.info("TEST MODE - Returning fake batch")
         return "test-batch-999999"
 
     if not API_KEY or API_KEY.strip() == "":
-        return "ERROR: STORM_API_KEY is missing in Railway Variables"
+        return "ERROR: STORM_API_KEY is missing or empty in Railway Variables"
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -123,14 +124,15 @@ async def submit_to_stormcheck(cards: List[str]):
                     "Content-Type": "application/json"
                 }
             )
-            logger.info(f"Stormcheck Status: {resp.status_code} | Response: {resp.text[:200]}")
+            logger.info(f"Stormcheck Status: {resp.status_code}")
+            logger.info(f"Stormcheck Response: {resp.text}")
 
             if resp.status_code in (200, 201):
                 data = resp.json()
                 batch_id = data.get("data", {}).get("batch_id") or data.get("batch_id")
                 if batch_id:
                     return batch_id
-            return f"ERROR: Stormcheck returned {resp.status_code} - {resp.text[:180]}"
+            return f"ERROR: Stormcheck returned {resp.status_code} - {resp.text[:200]}"
     except Exception as e:
         return f"ERROR: Exception - {str(e)}"
 
@@ -153,8 +155,10 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await query.edit_message_text("🚀 Submitting to Stormcheck...")
 
-    # Send only the first 4 fields that Stormcheck accepts
-    card_strings = [f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}" for c in session["cards"]]
+    # CORRECT FORMAT: card|mm|yy|cvv
+    card_strings = [f"{c['card']}|{c['mm']}|{c['yy']}|{c['cvv']}" for c in session["cards"]]
+
+    logger.info(f"Sending to Stormcheck: {card_strings[0]}")   # For debugging
 
     batch_id = await submit_to_stormcheck(card_strings)
 
@@ -162,7 +166,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ {batch_id}")
         return
 
-    await msg.edit_text("✅ Batch submitted.\nWaiting 8 seconds before polling...")
+    await msg.edit_text("✅ Batch submitted successfully.\nWaiting 8 seconds before quality check...")
 
     live_cards = await poll_with_progress(batch_id, session["cards"], msg)
     session["live_cards"] = live_cards
@@ -184,7 +188,7 @@ Live Rate   : {round((live/total)*100, 1) if total else 0.0}%
     await message.edit_text(text, reply_markup=POST_BUTTONS)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏭 FactoryVHQ v16.9 Ready\nSend cards or .txt file.", reply_markup=CHECK_BUTTON)
+    await update.message.reply_text("🏭 FactoryVHQ v17.0 Ready\nSend cards or .txt file.", reply_markup=CHECK_BUTTON)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -201,7 +205,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_document(bytes(content, "utf-8"), filename="FactoryVHQ_Live.txt", caption="✅ FactoryVHQ Live Cards")
         await query.edit_message_text("✅ Delivery Complete!", reply_markup=CHECK_BUTTON)
     else:
-        await query.edit_message_text("Send cards now.", reply_markup=CHECK_BUTTON)
+        await query.edit_message_text("Send your cards now.", reply_markup=CHECK_BUTTON)
         session["cards"] = []
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -233,7 +237,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v16.9 - Fixed Stormcheck Format")
+    print("🚀 FactoryVHQ v17.0 - Fixed Expiry Format (mm|yy|cvv)")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
