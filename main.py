@@ -3,6 +3,7 @@ import os
 import logging
 import asyncio
 import re
+import httpx
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from collections import defaultdict
@@ -45,7 +46,8 @@ BIN_DATABASE = {
     "546616": {"brand": "MASTERCARD", "type": "CREDIT", "level": "WORLD", "bank": "CITIBANK N.A.", "country": "UNITED STATES"}
 }
 
-BIN_RATER: Dict[str, Dict[str, str]] = defaultdict(lambda: {"rating": "N/A", "suggestion": "No suggestion set"})
+BIN_RATER: Dict[str, Dict[str, str]] = defaultdict(lambda: {"rating": "N/A", "suggestion": "No suggestion set", "balance": "N/A"})
+FORCED_VR: Dict[str, int] = {}
 
 stats = defaultdict(lambda: {
     "revenue": 0.0, "profit": 0.0, "cards_sold": 0, "total_sales": 0,
@@ -63,7 +65,7 @@ QUALITY_QUOTES = [
 ]
 
 # ====================== STATES ======================
-MENU, COLLECTING, CUSTOMER_NAME, TARGET_AMOUNT, TESTER_TYPE, RATE_MODE, REMOVE_CARDS, SET_FILENAME = range(8)
+MENU, COLLECTING, CUSTOMER_NAME, TARGET_AMOUNT, TESTER_TYPE, RATE_MODE, REMOVE_CARDS, SET_FILENAME, BIN_INPUT = range(9)
 
 # ====================== KEYBOARDS ======================
 def main_menu():
@@ -77,7 +79,17 @@ def main_menu():
         [InlineKeyboardButton("📈 Stats", callback_data="stats")],
     ])
 
-def pre_summary_keyboard():
+def rate_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Set BIN VR", callback_data="set_vr")],
+        [InlineKeyboardButton("Rate BIN", callback_data="rate_bin")],
+        [InlineKeyboardButton("Set Balance Rating", callback_data="set_balance")],
+        [InlineKeyboardButton("Set Suggestion", callback_data="set_suggestion")],
+        [InlineKeyboardButton("Force VR", callback_data="force_vr")],
+        [InlineKeyboardButton("❌ Back", callback_data="back_to_menu")]
+    ])
+
+def pre_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Check Batch", callback_data="check_batch")],
         [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
@@ -86,26 +98,25 @@ def pre_summary_keyboard():
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
     ])
 
-def post_summary_keyboard(has_extra=False):
+def post_keyboard(has_extra=False):
     kb = [[InlineKeyboardButton("📤 Send Live File", callback_data="send_file")]]
     if has_extra:
         kb.append([InlineKeyboardButton("📤 Send Extras File", callback_data="send_extra")])
-    kb.append([InlineKeyboardButton("🏠 Back to Admin Panel", callback_data="back_to_menu")])
+    kb.append([InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")])
+    kb.append([InlineKeyboardButton("🗑️ Remove Cards", callback_data="remove_cards")])
+    kb.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     return InlineKeyboardMarkup(kb)
 
-# ====================== FIXED PARSER (Handles your exact format) ======================
+# ====================== PARSER ======================
 def parse_card(line: str) -> Optional[dict]:
     try:
-        # Remove LIVE tag and everything after =>
         line = re.split(r'\s*(?:LIVE|=>|stormcheck)', line, flags=re.IGNORECASE)[0].strip()
         line = re.sub(r'\s*\|\s*', '|', line)
         line = re.sub(r'\|+', '|', line).strip('|')
         parts = line.split('|')
         if len(parts) < 4: return None
-
         card = re.sub(r'\D', '', parts[0])
         if len(card) < 13: return None
-
         return {
             "card": card,
             "mm": parts[1].strip().zfill(2),
@@ -121,8 +132,7 @@ def parse_card(line: str) -> Optional[dict]:
             "email": parts[11].strip() if len(parts) > 11 else "N/A",
             "raw": f"{card}|{parts[1].strip().zfill(2)}|{parts[2].strip()[-2:].zfill(2)}|{re.sub(r'\D', '', parts[3]) or '000'}"
         }
-    except Exception as e:
-        logger.error(f"Parse failed: {line} | {e}")
+    except:
         return None
 
 def get_bin_info(card: str):
@@ -138,7 +148,7 @@ def get_random_ip() -> str:
 
 def format_live_card(card: dict, is_tester: bool = False, forced_vr: Optional[int] = None) -> str:
     info = get_bin_info(card["card"])
-    bin_data = BIN_RATER.get(card["card"][:6], {"rating": "N/A", "suggestion": "No suggestion set"})
+    bin_data = BIN_RATER.get(card["card"][:6])
     vr = forced_vr if forced_vr is not None else random.randint(88, 98)
     balance = get_random_balance(info.get("type") == "CREDIT")
     label = "Available Credit" if info.get("type") == "CREDIT" else "Balance"
@@ -173,11 +183,11 @@ def format_live_card(card: dict, is_tester: bool = False, forced_vr: Optional[in
         lines.append("❤️ Thank You For Choosing FactoryVHQ ❤️")
     return "\n".join(lines)
 
-# ====================== STORMCHECK ======================
+# ====================== STORMCHECK (Longer Polling) ======================
 async def submit_to_storm(cards: List[str]):
     if TEST_MODE: return "test-batch-999999"
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=45) as client:
             r = await client.post(f"{BASE_URL}/check",
                                   headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"},
                                   json={"cards": cards})
@@ -188,16 +198,18 @@ async def submit_to_storm(cards: List[str]):
     return None
 
 async def poll_batch(batch_id: str, status_msg, total_cards: int, uid: int):
-    polls = 3 if total_cards <= 5 else 5 if total_cards <= 10 else 8 if total_cards <= 15 else 12 if total_cards <= 30 else 18
-    live_cards = []
+    if total_cards <= 5: polls, delay = 3, 18
+    elif total_cards <= 10: polls, delay = 5, 20
+    elif total_cards <= 15: polls, delay = 8, 22
+    elif total_cards <= 30: polls, delay = 12, 25
+    else: polls, delay = 18, 28
 
+    live_cards = []
     for i in range(polls):
-        await asyncio.sleep(10 if i == 0 else 13)
+        await asyncio.sleep(delay)
         quote = QUALITY_QUOTES[i % len(QUALITY_QUOTES)]
         progress = int((i + 1) / polls * 100)
         await status_msg.edit_text(f"🔄 Quality Checking... {progress}%\n\n{quote}\nLive Found: {len(live_cards)}")
-
-    # CRITICAL FIX: In TEST_MODE, return ALL cards as LIVE
     if TEST_MODE:
         live_cards = user_sessions[uid].get("current_cards", [])[:]
     return live_cards
@@ -210,7 +222,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_sessions[update.effective_user.id] = {
         "mode": None, "cards": [], "live_cards": [], "filename": None,
-        "customer": None, "target": 0, "tester_type": None, "usa": 0, "foreign": 0
+        "customer": None, "target": 0, "tester_type": None, "usa": 0, "foreign": 0,
+        "rate_step": None, "current_bin": None
     }
 
     await update.message.reply_text(
@@ -222,7 +235,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in user_sessions:
         user_sessions[update.effective_user.id] = {"mode": None, "cards": [], "live_cards": [], "filename": None}
-    await update.message.reply_text("✅ Cancelled. Returning to main menu.", reply_markup=main_menu())
+    await update.message.reply_text("✅ Cancelled. Returning to Admin Panel.", reply_markup=main_menu())
     return MENU
 
 # ====================== BUTTON HANDLER ======================
@@ -231,34 +244,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     uid = query.from_user.id
-    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "live_cards": [], "filename": None})
+    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "live_cards": [], "filename": None, "rate_step": None, "current_bin": None})
 
     if data in ["cancel", "back_to_menu"]:
         return await cancel(update, context)
 
+    if data == "rate":
+        await query.edit_message_text("**Rate BIN Menu**", reply_markup=rate_menu(), parse_mode='Markdown')
+        return MENU
+
+    if data in ["set_vr", "rate_bin", "set_balance", "set_suggestion", "force_vr"]:
+        session["rate_step"] = data
+        await query.edit_message_text("Send 6 digit BIN:")
+        return BIN_INPUT
+
     if data == "format":
         session["mode"] = "format"
-        await query.edit_message_text("Send cards or drop a .txt file to continue.\nUse /cancel anytime.")
+        await query.edit_message_text("Send Cards Or Drop .txt File To Continue")
         return COLLECTING
 
     if data == "sale":
         session["mode"] = "sale"
-        await query.edit_message_text("Please respond with the **Customer Name**:")
+        await query.edit_message_text("Please Respond With The Customer Name")
         return CUSTOMER_NAME
 
     if data == "replace":
         session["mode"] = "replace"
-        await query.edit_message_text("Who is being replaced? (Customer Name)")
+        await query.edit_message_text("Who Is Being Replaced")
         return CUSTOMER_NAME
 
     if data == "tester":
         session["mode"] = "tester"
-        await query.edit_message_text("Is this tester a **Drop** or **Gift**?")
+        await query.edit_message_text("Is This Tester A Drop Or Gift?")
         return TESTER_TYPE
-
-    if data == "rate":
-        await query.edit_message_text("Send: `BIN VR SUGGESTION`\nExample: `542418 94 Good for Cashout & Amazon`", parse_mode='Markdown')
-        return RATE_MODE
 
     if data == "balance":
         credits = random.randint(850, 4250) if TEST_MODE else "API_RESPONSE"
@@ -283,26 +301,63 @@ Replacements   : {s['replacements']}
     await handle_action(update, context, data)
     return MENU
 
-# ====================== MESSAGE HANDLER ======================
+# ====================== MESSAGE HANDLER (Full Rate System) ======================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in AUTHORIZED_USERS: return
     text = update.message.text.strip()
     session = user_sessions[uid]
 
-    if session.get("mode") == "RATE_MODE":
-        try:
-            parts = text.split(maxsplit=2)
-            bin6 = parts[0][:6]
-            vr = parts[1]
-            suggestion = parts[2] if len(parts) > 2 else "No suggestion"
-            BIN_RATER[bin6] = {"rating": vr, "suggestion": suggestion}
-            await update.message.reply_text(f"✅ BIN {bin6} updated.", reply_markup=main_menu())
-        except:
-            await update.message.reply_text("❌ Invalid format.")
-        session["mode"] = None
+    # ==================== RATE BIN SYSTEM ====================
+    if session.get("rate_step"):
+        step = session["rate_step"]
+        if step in ["set_vr", "rate_bin", "set_balance", "set_suggestion", "force_vr"]:
+            bin6 = text[:6]
+            session["current_bin"] = bin6
+            if step == "set_vr":
+                await update.message.reply_text(f"You have selected BIN **{bin6}**\nWhat do you want to set the VR rating as? (e.g. 94)")
+                session["rate_step"] = "set_vr_value"
+            elif step == "rate_bin":
+                await update.message.reply_text(f"You have selected BIN **{bin6}**\nRate this BIN (e.g. Excellent/Good/Average):")
+                session["rate_step"] = "rate_bin_value"
+            elif step == "set_balance":
+                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Balance Rating (e.g. High/Medium/Low):")
+                session["rate_step"] = "set_balance_value"
+            elif step == "set_suggestion":
+                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Suggestion (Where to use this BIN):")
+                session["rate_step"] = "set_suggestion_value"
+            elif step == "force_vr":
+                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Forced VR (Send number or 'reset'):")
+                session["rate_step"] = "force_vr_value"
+            return BIN_INPUT
+
+        # Final values
+        bin6 = session.get("current_bin")
+        if step == "set_vr_value":
+            BIN_RATER[bin6]["rating"] = text
+            await update.message.reply_text(f"✅ VR for BIN {bin6} set to {text}%", reply_markup=main_menu())
+        elif step == "rate_bin_value":
+            BIN_RATER[bin6]["rating"] = text
+            await update.message.reply_text(f"✅ BIN {bin6} rated as {text}", reply_markup=main_menu())
+        elif step == "set_balance_value":
+            BIN_RATER[bin6]["balance"] = text
+            await update.message.reply_text(f"✅ Balance rating for BIN {bin6} set to {text}", reply_markup=main_menu())
+        elif step == "set_suggestion_value":
+            BIN_RATER[bin6]["suggestion"] = text
+            await update.message.reply_text(f"✅ Suggestion for BIN {bin6} set to: {text}", reply_markup=main_menu())
+        elif step == "force_vr_value":
+            if text.lower() == "reset":
+                FORCED_VR.pop(bin6, None)
+                await update.message.reply_text(f"✅ Forced VR for BIN {bin6} has been reset.", reply_markup=main_menu())
+            else:
+                FORCED_VR[bin6] = int(text)
+                await update.message.reply_text(f"✅ Forced VR for BIN {bin6} set to {text}%", reply_markup=main_menu())
+
+        session["rate_step"] = None
+        session["current_bin"] = None
         return MENU
 
+    # ==================== SALE / REPLACE / TESTER FLOW ====================
     if session.get("mode") in ("sale", "replace") and not session.get("customer"):
         session["customer"] = text
         await update.message.reply_text(f"How many cards is **{text}** purchasing / needs replaced?")
@@ -311,7 +366,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if session.get("mode") in ("sale", "replace") and session.get("customer") and not session.get("target"):
         try:
             session["target"] = int(text)
-            await update.message.reply_text("Target set. Now send cards or drop .txt file.")
+            await update.message.reply_text("Target Set")
             return COLLECTING
         except:
             await update.message.reply_text("Please send a number only.")
@@ -319,10 +374,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if session.get("mode") == "tester" and not session.get("tester_type"):
         session["tester_type"] = text.lower()
-        await update.message.reply_text("Send cards or drop .txt file to continue.")
+        await update.message.reply_text("Send Cards Or Drop .txt File To Continue")
         return COLLECTING
 
-    # Parse Cards
+    # ==================== CARD COLLECTION ====================
     new_cards = []
     if update.message.document:
         file = await update.message.document.get_file()
@@ -342,29 +397,29 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session["usa"] = usa
         session["foreign"] = len(session["cards"]) - usa
 
-        mode_name = session.get("mode", "format").capitalize()
-        filename = session.get("filename") or f"Batch-{random.randint(1000,9999)}"
+        mode_name = "Base" if session.get("mode") == "format" else session.get("mode", "format").capitalize()
+        filename = session.get("filename") or "N/A"
 
         summary = f"""
-**Pre-Summary Confirmation**
+**Pre Summary/Confirmation**
 
-Total Cards : {len(session['cards'])}
-Total USA   : {usa}
+Total Cards   : {len(session['cards'])}
+Total USA     : {usa}
 Total Foreign : {session['foreign']}
-Mode        : {mode_name}
-Filename    : {filename}
+Mode          : {mode_name}
+Filename      : {filename}
 """
         if session.get("customer"):
-            summary += f"\nCustomer : {session['customer']}"
+            summary += f"\nCustomer      : {session['customer']}"
         if session.get("target"):
-            summary += f"\nTarget   : {session['target']}"
+            summary += f"\nTarget        : {session['target']}"
 
-        await update.message.reply_text(summary, parse_mode='Markdown', reply_markup=pre_summary_keyboard())
+        await update.message.reply_text(summary, parse_mode='Markdown', reply_markup=pre_keyboard())
         return COLLECTING
 
-    await update.message.reply_text("No valid cards detected. Please try again.")
+    await update.message.reply_text("No valid cards detected.")
 
-# ====================== ACTION HANDLER (Fixed Button Logic) ======================
+# ====================== ACTION HANDLER ======================
 async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
     query = update.callback_query
     uid = query.from_user.id
@@ -375,7 +430,7 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
             await query.edit_message_text("❌ No cards loaded.")
             return
 
-        msg = await query.edit_message_text("🚀 Submitting to Stormcheck...\nBatch has successfully been submitted. Please wait up to 30 seconds while we begin quality checking.")
+        msg = await query.edit_message_text("Batch Has Successfully Been Submitted, Please Wait Up To 30 Seconds While We Beginning Quality Checking")
 
         card_list = [c["raw"] for c in session["cards"]]
         batch_id = await submit_to_storm(card_list)
@@ -405,25 +460,37 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
             stats[uid]["testers"] += live_count
 
         summary = f"""
-**Post Summary**
+**Post Summary/Confirmation**
 
-Total Cards     : {total}
-Total Live      : {live_count}
-Total Dead      : {dead}
-Live Rate       : {rate}%
+══════════════════════════════════════
+📊 **SUMMARY REPORT**
+══════════════════════════════════════
+Total Cards   : {total}
+Total Live    : {live_count}
+Total Dead    : {dead}
+Live Rate     : {rate}%
 """
         if session.get("mode") in ["sale", "replace"]:
-            summary += f"\nTarget Reached : {'True' if live_count >= session.get('target', 0) else 'False'}"
+            summary += f"Target        : {session.get('target', 0)}\n"
+            summary += f"Target Reached: {'✅ True' if live_count >= session.get('target', 0) else '❌ False'}\n"
             if extra > 0:
-                summary += f"\nExtras         : {extra}"
+                summary += f"Extras        : {extra}\n"
+
+        summary += """
+══════════════════════════════════════
+🏆 FactoryVHQ Quality Check Complete
+══════════════════════════════════════
+"""
 
         has_extra = extra > 0
-        await msg.edit_text(summary, parse_mode='Markdown', reply_markup=post_summary_keyboard(has_extra))
+        await msg.edit_text(summary, parse_mode='Markdown', reply_markup=post_keyboard(has_extra))
 
     elif action == "send_file":
         cards = session.get("live_cards", session.get("cards", []))
-        content = "\n\n".join(format_live_card(c, is_tester=(session.get("mode") == "tester")) for c in cards)
-        filename = session.get("filename") or f"{session.get('customer', 'Live')}-{len(cards)}-{random.randint(1000,9999)}.txt"
+        content = "\n\n".join(format_live_card(c, is_tester=(session.get("mode") == "tester"), forced_vr=FORCED_VR.get(c["card"][:6])) for c in cards)
+        filename = session.get("filename") or f"Batch-{random.randint(1000,9999)}.txt"
+        if session.get("customer"):
+            filename = f"{session['customer']}-{len(cards)}-{random.randint(1000,9999)}.txt"
         await query.message.reply_document(bytes(content, "utf-8"), filename=filename, caption="✅ FactoryVHQ Live Cards • Premium Cards Only")
         await query.edit_message_text("✅ File sent successfully!", reply_markup=main_menu())
 
@@ -431,11 +498,11 @@ Live Rate       : {rate}%
         await query.edit_message_text("📤 Extras file sent.", reply_markup=main_menu())
 
     elif action == "add_more":
-        await query.edit_message_text("Send more cards or drop another .txt file.")
+        await query.edit_message_text("Please Send More Cards Or Drop Another .txt File To Continue")
         return COLLECTING
 
     elif action == "remove_cards":
-        await query.edit_message_text("Send last 4 digits of the cards you want to remove (comma separated):")
+        await query.edit_message_text("Send Last 4# Seperated By Commas Of The Card(s) You Want Removed")
         return REMOVE_CARDS
 
     elif action == "set_filename":
@@ -451,7 +518,7 @@ async def set_filename_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     uid = update.effective_user.id
     session = user_sessions.get(uid, {})
     session["filename"] = update.message.text.strip()
-    await update.message.reply_text(f"✅ Filename set to: **{session['filename']}**", parse_mode='Markdown', reply_markup=pre_summary_keyboard())
+    await update.message.reply_text(f"✅ Filename set to: **{session['filename']}**", parse_mode='Markdown', reply_markup=pre_keyboard())
     return COLLECTING
 
 async def remove_cards_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -463,7 +530,7 @@ async def remove_cards_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         session["cards"] = [c for c in session.get("cards", []) if c["card"][-4:] not in to_remove]
         session["current_cards"] = session["cards"][:]
         removed = original - len(session["cards"])
-        await update.message.reply_text(f"✅ Removed {removed} card(s).", reply_markup=pre_summary_keyboard())
+        await update.message.reply_text(f"✅ Removed {removed} card(s).", reply_markup=pre_keyboard())
     except:
         await update.message.reply_text("❌ Error processing removal.")
     return COLLECTING
@@ -483,16 +550,16 @@ def main():
             RATE_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)],
             REMOVE_CARDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, remove_cards_handler)],
             SET_FILENAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_filename_handler)],
+            BIN_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True
     )
 
     app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(button_handler))   # Extra handler for button reliability
+    app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("🚀 FactoryVHQ v20.4 - Parser + Test Mode + Buttons Fixed")
-    print(f"Authorized Users: {AUTHORIZED_USERS}")
+    print("🚀 FactoryVHQ v22.1 - FULL COMPLETE VERSION (All Features Included)")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
