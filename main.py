@@ -28,8 +28,14 @@ TEST_MODE = os.getenv("TEST_MODE", "False").lower() == "true"
 BUY_COST = float(os.getenv("BUY_COST", 1.40))
 SELL_PRICE = float(os.getenv("SELL_PRICE", 10.0))
 
-# ← ADMIN_IDS FROM RAILWAY (comma separated)
-ADMIN_IDS = set(int(x.strip()) for x in os.getenv("ADMIN_IDS", "0").split(",") if x.strip().isdigit())
+# Primary Owner (single ID)
+OWNER_ID = int(os.getenv("OWNER_ID", 0))
+
+# Multiple Admins (comma separated in Railway)
+ADMIN_IDS = set(int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit())
+
+# Combine both
+AUTHORIZED_USERS = ADMIN_IDS | {OWNER_ID} if OWNER_ID != 0 else ADMIN_IDS
 
 # ====================== BIN DATABASE ======================
 BIN_DATABASE: Dict[str, Dict[str, str]] = {
@@ -56,7 +62,7 @@ stats = defaultdict(lambda: {
     "testers": 0, "replacements": 0
 })
 
-# ====================== STATES ======================
+# ====================== CONVERSATION STATES ======================
 (
     MENU, COLLECTING, CUSTOMER_NAME, TARGET_AMOUNT, TESTER_TYPE,
     RATE_MODE, REMOVE_CARDS, SET_FILENAME
@@ -180,7 +186,7 @@ def format_live_card(card: dict, is_tester: bool = False, forced_vr: Optional[in
         lines.append("❤️ Thank You For Choosing FactoryVHQ ❤️")
     return "\n".join(lines)
 
-# ====================== STORMCHECK ======================
+# ====================== STORMCHECK API ======================
 async def submit_to_storm(cards: List[str]) -> Optional[str]:
     if TEST_MODE: return "test-batch-999999"
     try:
@@ -211,22 +217,23 @@ async def poll_batch(batch_id: str, status_msg: Any, total_cards: int, uid: int)
         live_cards = user_sessions[uid].get("current_cards", [])[:]
     return live_cards
 
-# ====================== USER SESSIONS ======================
+# ====================== SESSIONS ======================
 user_sessions: Dict[int, dict] = {}
 
 # ====================== START ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ Unauthorized. This bot is restricted to admins only.")
+    user_id = update.effective_user.id
+    if user_id not in AUTHORIZED_USERS:
+        await update.message.reply_text("⛔ Unauthorized. This bot is restricted to authorized admins only.")
         return ConversationHandler.END
 
-    user_sessions[update.effective_user.id] = {
+    user_sessions[user_id] = {
         "mode": None, "cards": [], "live_cards": [], "filename": None,
         "customer": None, "target": 0, "tester_type": None, "usa": 0, "foreign": 0
     }
 
     await update.message.reply_text(
-        f"**FactoryVHQ Admin Panel v19.2**\nWelcome @{update.effective_user.username or 'Admin'}",
+        f"**FactoryVHQ Admin Panel v19.3**\nWelcome @{update.effective_user.username or 'Admin'}",
         reply_markup=main_menu(), parse_mode='Markdown'
     )
     return MENU
@@ -235,7 +242,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
     return MENU
 
-# ====================== BUTTON & MESSAGE HANDLERS ======================
+# ====================== BUTTON HANDLER ======================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -294,9 +301,10 @@ Replacements   : {s['replacements']}
     await handle_action(update, context, data)
     return MENU
 
+# ====================== MESSAGE HANDLER ======================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if uid not in ADMIN_IDS: return
+    if uid not in AUTHORIZED_USERS: return
     text = update.message.text.strip()
     session = user_sessions[uid]
 
@@ -307,7 +315,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             vr = parts[1]
             suggestion = parts[2] if len(parts) > 2 else "No suggestion"
             BIN_RATER[bin6] = {"rating": vr, "suggestion": suggestion}
-            await update.message.reply_text(f"✅ BIN {bin6} updated.", reply_markup=main_menu())
+            await update.message.reply_text(f"✅ BIN {bin6} updated successfully.", reply_markup=main_menu())
         except:
             await update.message.reply_text("❌ Invalid format. Try again.")
         session["mode"] = None
@@ -332,7 +340,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Send cards or drop .txt file.")
         return COLLECTING
 
-    # Parse cards
+    # Card Collection
     new_cards = []
     if update.message.document:
         file = await update.message.document.get_file()
@@ -372,7 +380,7 @@ Filename    : {filename}
         await update.message.reply_text(summary, parse_mode='Markdown', reply_markup=pre_summary_keyboard())
         return COLLECTING
 
-    await update.message.reply_text("No valid cards detected.")
+    await update.message.reply_text("No valid cards detected. Please send again or upload a file.")
 
 # ====================== ACTION HANDLER ======================
 async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
@@ -412,7 +420,7 @@ Live Rate       : {rate}%
             if extra > 0:
                 summary += f"\nExtras         : {extra}"
 
-        # Update stats
+        # Update Stats
         if session.get("mode") == "sale":
             revenue = live_count * SELL_PRICE
             profit = revenue - (live_count * BUY_COST)
@@ -435,8 +443,10 @@ Live Rate       : {rate}%
         cards = session.get("live_cards", session.get("cards", []))
         content = "\n\n".join(format_live_card(c, is_tester=(session.get("mode") == "tester")) for c in cards)
         filename = session.get("filename") or f"{session.get('customer', 'Live')}-{len(cards)}-{random.randint(1000,9999)}.txt"
-        await query.message.reply_document(bytes(content, "utf-8"), filename=filename,
-                                           caption="✅ FactoryVHQ Live Cards • Premium Cards Only")
+        await query.message.reply_document(
+            bytes(content, "utf-8"), filename=filename,
+            caption="✅ FactoryVHQ Live Cards • Premium Cards Only"
+        )
         await query.edit_message_text("✅ File sent successfully!", reply_markup=main_menu())
 
     elif action == "send_extra":
@@ -458,7 +468,7 @@ Live Rate       : {rate}%
         await start(update, context)
         return MENU
 
-# ====================== STATE HANDLERS ======================
+# ====================== ADDITIONAL HANDLERS ======================
 async def set_filename_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     session = user_sessions.get(uid, {})
@@ -477,7 +487,7 @@ async def remove_cards_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         session["current_cards"] = session["cards"][:]
         await update.message.reply_text(f"✅ Removed {removed} card(s).", reply_markup=pre_summary_keyboard())
     except Exception:
-        await update.message.reply_text("❌ Error processing removal request.")
+        await update.message.reply_text("❌ Error processing removal.")
     return COLLECTING
 
 # ====================== MAIN ======================
@@ -502,7 +512,8 @@ def main():
 
     app.add_handler(conv_handler)
 
-    print("🚀 FactoryVHQ v19.2 Advanced - Premium Cards Only - Successfully Loaded")
+    print("🚀 FactoryVHQ v19.3 Advanced - Premium Cards Only - Loaded Successfully")
+    print(f"Authorized Users: {AUTHORIZED_USERS}")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
