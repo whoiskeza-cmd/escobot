@@ -203,8 +203,8 @@ async def submit_to_storm(cards: List[str]):
         return None
 
 async def get_batch_result(batch_id: str):
-    if not batch_id:
-        return {"live_count": 0, "items": []}
+    if TEST_MODE or not batch_id:
+        return {"live_count": 1, "items": []}
     
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -213,13 +213,19 @@ async def get_batch_result(batch_id: str):
             r.raise_for_status()
             data = r.json()
             
-            # DEBUG: Print full response
             logger.info(f"RAW API RESPONSE: {data}")
             
-            result = data.get("data", [{}])[0] if isinstance(data.get("data"), list) else data.get("data", {})
-            
-            live_count = result.get("live_count", 0)
-            items = result.get("items", [])
+            # FIXED PARSING - Follow the exact structure from your logs
+            batch_data = data.get("data", {})
+            if isinstance(batch_data, dict) and "batch" in batch_data:
+                batch = batch_data.get("batch", {})
+                items = batch_data.get("items", [])
+                live_count = batch.get("live_count", 0)
+            else:
+                # Fallback for other possible structures
+                batch = batch_data.get("batch", batch_data)
+                items = batch_data.get("items", [])
+                live_count = batch.get("live_count", 0)
             
             logger.info(f"Parsed - live_count: {live_count} | items found: {len(items)}")
             for item in items:
@@ -230,32 +236,41 @@ async def get_batch_result(batch_id: str):
         logger.error(f"Get batch result failed: {e}")
         return {"live_count": 0, "items": []}
 async def poll_batch(batch_id: str, status_msg, total_cards: int, uid: int):
-    if total_cards <= 5: polls, delay = 5, 12
-    elif total_cards <= 10: polls, delay = 7, 15
-    else: polls, delay = 10, 18
-    for i in range(polls):
+    max_attempts = 12
+    delay = 5
+    
+    for attempt in range(max_attempts):
         await asyncio.sleep(delay)
         result = await get_batch_result(batch_id)
         live_count = result.get("live_count", 0)
-        quote = QUALITY_QUOTES[i % len(QUALITY_QUOTES)]
-        progress = int((i + 1) / polls * 100)
-        await status_msg.edit_text(f"🔄 Quality Checking... {progress}%\n\n{quote}\nLive Found: {live_count}")
+        
+        quote = QUALITY_QUOTES[attempt % len(QUALITY_QUOTES)]
+        progress = min(100, int((attempt + 1) / max_attempts * 100))
+        
+        await status_msg.edit_text(
+            f"🔄 Quality Checking... {progress}%\n"
+            f"{quote}\n"
+            f"Live Found: {live_count}"
+        )
+        
+        if live_count > 0:
+            break
+    # Final fetch
     final = await get_batch_result(batch_id)
     items = final.get("items", [])
     
     live_cards = []
-    current_cards = user_sessions[uid].get("current_cards", [])
+    current_cards = user_sessions.get(uid, {}).get("current_cards", [])
     
     for item in items:
         if str(item.get("status", "")).lower() == "live":
-            card_num = str(item.get("card", ""))[:16]
+            card_num = str(item.get("card_number", "")).strip()[:16]
             for card in current_cards:
                 if card["card"] == card_num:
                     live_cards.append(card)
                     break
     logger.info(f"FINAL: Found {len(live_cards)} live cards from {len(items)} total items")
     return live_cards
-
 # ====================== START ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_USERS:
