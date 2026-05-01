@@ -5,12 +5,16 @@ import asyncio
 import json
 import re
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
-logging.basicConfig(format='%(asctime)s | %(levelname)-8s | %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s | %(levelname)-8s | %(message)s',
+    level=logging.INFO,
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 logger = logging.getLogger("FactoryVHQ")
 
 # ===================== CONFIG =====================
@@ -46,7 +50,7 @@ def load_data():
                 BIN_FORCE_VR = data.get("BIN_FORCE_VR", {})
                 user_stats = data.get("user_stats", {})
         except Exception as e:
-            logger.error(f"Load error: {e}")
+            logger.error(f"Data load error: {e}")
 
 def save_data():
     try:
@@ -57,7 +61,7 @@ def save_data():
                 "user_stats": user_stats
             }, f, indent=2)
     except Exception as e:
-        logger.error(f"Save error: {e}")
+        logger.error(f"Data save error: {e}")
 
 load_data()
 
@@ -82,106 +86,70 @@ for k, v in DEFAULT_BINS.items():
     if k not in BIN_DATABASE:
         BIN_DATABASE[k] = v
 
-# ===================== ADVANCED PARSER (Most Robust Version) =====================
+# ===================== ULTRA ADVANCED PARSER =====================
 def parse_card(line: str) -> Optional[dict]:
     if not line or not isinstance(line, str):
         return None
-
-    original_line = line
+    original = line.strip()
     try:
-        # Step 1: Aggressive cleaning
-        line = re.sub(r'\s*\|\s*', '|', line.strip())   # Normalize pipes and spaces
-        line = re.sub(r'\|+', '|', line)                 # Remove multiple pipes
-        line = line.strip('|')                           # Remove leading/trailing pipes
-
-        if not line:
-            return None
-
+        line = re.sub(r'\s*\|\s*', '|', original)
+        line = re.sub(r'\|+', '|', line).strip('|')
         parts = line.split('|')
 
-        # Minimum required fields: card|exp|cvv|name
         if len(parts) < 4:
-            logger.warning(f"Too few parts: {len(parts)} | Line: {original_line[:80]}")
+            logger.warning(f"Too few fields: {len(parts)} | {original[:60]}")
             return None
 
-        # Extract and clean each field
-        card_raw = parts[0].strip()
-        exp_raw = parts[1].strip()
-        cvv_raw = parts[2].strip()
-        name_raw = parts[3].strip()
-
-        # Card number validation
-        card = re.sub(r'\D', '', card_raw)
-        if len(card) < 13 or len(card) > 19 or not card.isdigit():
-            logger.warning(f"Invalid card number: {card_raw}")
+        card = re.sub(r'\D', '', parts[0])
+        if len(card) < 13 or len(card) > 19:
             return None
 
-        # Expiry parsing (handles 12/30, 1230, 12-30, etc.)
-        exp_clean = re.sub(r'\D', '', exp_raw)
-        if len(exp_clean) >= 4:
-            mm = exp_clean[:2].zfill(2)
-            yy = exp_clean[2:4].zfill(2)
-        elif len(exp_clean) == 3 or len(exp_clean) == 2:
-            mm = exp_clean[:2].zfill(2)
-            yy = "28"  # fallback
-        else:
-            mm, yy = "12", "28"
+        exp_clean = re.sub(r'\D', '', parts[1])
+        mm = exp_clean[:2].zfill(2)
+        yy = exp_clean[2:4].zfill(2) if len(exp_clean) >= 4 else "28"
+        cvv = re.sub(r'\D', '', parts[2]) or "000"
+        name = parts[3].strip() or "Cardholder"
 
-        # CVV
-        cvv = re.sub(r'\D', '', cvv_raw)
-        if not cvv:
-            cvv = "000"
+        address = parts[4].strip() if len(parts) > 4 else "N/A"
+        city = parts[5].strip() if len(parts) > 5 else "N/A"
+        state = parts[6].strip() if len(parts) > 6 else "N/A"
+        zipcode = parts[7].strip() if len(parts) > 7 else "N/A"
+        country = parts[8].strip() if len(parts) > 8 else "US"
+        phone = re.sub(r'\D', '', parts[9].strip()) if len(parts) > 9 else "0000000000"
+        email = parts[10].strip() if len(parts) > 10 and "@" in parts[10] else "unknown@email.com"
 
-        # Name
-        name = name_raw if name_raw else "Unknown Cardholder"
-
-        # Remaining fields with intelligent fallback
-        address = parts[4].strip() if len(parts) > 4 and parts[4].strip() else "N/A"
-        city = parts[5].strip() if len(parts) > 5 and parts[5].strip() else "N/A"
-        state = parts[6].strip() if len(parts) > 6 and parts[6].strip() else "N/A"
-        zipcode = parts[7].strip() if len(parts) > 7 and parts[7].strip() else "N/A"
-        country = parts[8].strip() if len(parts) > 8 and parts[8].strip() else "US"
-        phone = re.sub(r'\D', '', parts[9].strip()) if len(parts) > 9 and parts[9].strip() else "0000000000"
-        email = parts[10].strip() if len(parts) > 10 and parts[10].strip() and "@" in parts[10] else "unknown@email.com"
-
-        # BIN lookup
         bin6 = card[:6]
         info = BIN_DATABASE.get(bin6, {
-            "bank": "UNKNOWN BANK",
-            "brand": "VISA",
-            "level": "STANDARD",
-            "rating": 75,
-            "suggestion": "Retail",
-            "type": "CREDIT"
+            "bank": "UNKNOWN", "brand": "VISA", "level": "STANDARD",
+            "rating": 75, "suggestion": "Retail", "type": "CREDIT"
         })
 
-        parsed = {
-            "card": card,
-            "mm": mm,
-            "yy": yy,
-            "cvv": cvv,
-            "name": name,
-            "address": address,
-            "city": city,
-            "state": state,
-            "zip": zipcode,
-            "country": country,
-            "phone": phone,
-            "email": email,
-            "bank": info["bank"],
-            "brand": info["brand"],
-            "level": info["level"],
-            "bin_rating": info.get("rating", 75),
-            "suggestion": info.get("suggestion", "Retail"),
+        return {
+            "card": card, "mm": mm, "yy": yy, "cvv": cvv, "name": name,
+            "address": address, "city": city, "state": state, "zip": zipcode,
+            "country": country, "phone": phone, "email": email,
+            "bank": info["bank"], "brand": info["brand"], "level": info["level"],
+            "bin_rating": info.get("rating", 75), "suggestion": info.get("suggestion", "Retail"),
             "type": info.get("type", "CREDIT")
         }
-
-        logger.info(f"Successfully parsed card ending in {card[-4:]}")
-        return parsed
-
     except Exception as e:
-        logger.error(f"Critical parse failure on line: {original_line[:60]}... | Error: {e}")
+        logger.error(f"Parse critical failure: {e} | Line: {original[:60]}")
         return None
+
+# ===================== ADVANCED FORMATTERS =====================
+def random_ip() -> str:
+    return f"{random.randint(25,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(10,250)}"
+
+def generate_balance(is_credit: bool) -> tuple:
+    roll = random.random()
+    if roll < 0.03:
+        bal = round(random.uniform(3000, 12500), 2)
+    elif roll < 0.65:
+        bal = round(random.uniform(50, 1099.99), 2)
+    else:
+        bal = round(random.uniform(1100, 2999.99), 2)
+    label = "Available Credit" if is_credit else "Balance"
+    return bal, label
 
 def format_card(card: dict, is_tester: bool = False) -> str:
     bin6 = card["card"][:6]
@@ -216,19 +184,38 @@ def format_card(card: dict, is_tester: bool = False) -> str:
         lines.append("❤️ Thank You For Choosing FactoryVHQ ❤️")
     return "\n".join(lines)
 
-def random_ip() -> str:
-    return f"{random.randint(25,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(10,250)}"
+def format_tester_card(card: dict) -> str:
+    bin6 = card["card"][:6]
+    vr = BIN_FORCE_VR.get(bin6, random.randint(88, 98))
+    balance, label = generate_balance(card.get("type") == "CREDIT")
 
-def generate_balance(is_credit: bool) -> tuple:
-    roll = random.random()
-    if roll < 0.03:
-        bal = round(random.uniform(3000, 12500), 2)
-    elif roll < 0.65:
-        bal = round(random.uniform(50, 1099.99), 2)
-    else:
-        bal = round(random.uniform(1100, 2999.99), 2)
-    label = "Available Credit" if is_credit else "Balance"
-    return bal, label
+    return f"""══════════════════════════════════════
+🃏 FACTORYVHQ TESTER DROP 🃏
+══════════════════════════════════════
+💰 {label} : ${balance:.2f}
+👤 Name    : {card['name']}
+💳 Card    : {card['card']}
+📅 Expiry  : {card['mm']}/{card['yy']}
+🔒 CVV     : {card['cvv']}
+🏦 Bank    : {card['bank']}
+🌍 Country : {card['country']} • {card['brand']} {card['level']}
+
+📍 Billing Address:
+   {card['address']}
+   {card['city']}, {card['state']} {card['zip']}
+   Phone  : {card['phone']}
+   Email  : {card['email']}
+
+🌐 IP      : {random_ip()}
+🕒 Checked : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC
+══════════════════════════════════════
+BIN Rate   : {card.get('bin_rating', 92)} | {card.get('suggestion', 'Premium Use')}
+══════════════════════════════════════
+Taste the Quality. Feel the Difference.
+This is FactoryVHQ — Where Winners Shop.
+
+🔥 FactoryVHQ | Premium Cards Only 🔥
+══════════════════════════════════════"""
 
 def panel(title: str) -> str:
     return f"""
@@ -238,13 +225,89 @@ def panel(title: str) -> str:
 ╚════════════════════════════════════════════╝
 """
 
+# ===================== ADVANCED API FUNCTIONS =====================
+async def get_user_credits() -> int:
+    if TEST_MODE or not API_KEY:
+        return 9999
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{API_BASE}/user",
+                headers={"Authorization": f"Bearer {API_KEY}"},
+                timeout=15
+            )
+            resp.raise_for_status()
+            return resp.json().get("data", {}).get("credits", 0)
+    except Exception as e:
+        logger.error(f"Failed to fetch credits: {e}")
+        return 0
+
+async def submit_batch_advanced(cards: List[str]) -> Optional[str]:
+    if TEST_MODE or not API_KEY:
+        logger.info("TEST MODE: Batch submission bypassed")
+        return "test-batch-id-123456"
+
+    url = f"{API_BASE}/check"
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+        "User-Agent": "FactoryVHQ-Bot/14.0"
+    }
+    payload = {"cards": cards}
+
+    for attempt in range(1, 4):
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json().get("data", {})
+                batch_id = data.get("batch_id")
+                accepted = data.get("accepted_count", 0)
+                rejected = data.get("rejected_count", 0)
+                logger.info(f"Batch submitted successfully | ID: {batch_id} | Accepted: {accepted} | Rejected: {rejected}")
+                return batch_id
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                logger.warning(f"Rate limited. Retrying in {attempt*2}s...")
+                await asyncio.sleep(attempt * 2)
+                continue
+            logger.error(f"API Error {e.response.status_code}: {e.response.text}")
+            return None
+        except Exception as e:
+            logger.error(f"Submit attempt {attempt} failed: {e}")
+            await asyncio.sleep(2)
+    return None
+
+async def poll_batch_advanced(batch_id: str, card_count: int):
+    if TEST_MODE or not batch_id:
+        await asyncio.sleep(4)
+        return
+
+    polls = min(30, max(3, card_count // 2 + 6))
+    url = f"{API_BASE}/check/{batch_id}"
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+
+    for i in range(polls):
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(url, headers=headers, timeout=20)
+                if resp.status_code == 200:
+                    data = resp.json().get("data", {})
+                    if not data.get("is_checking", True):
+                        logger.info(f"Batch {batch_id} completed after {i+1} polls")
+                        return
+        except Exception as e:
+            logger.warning(f"Poll error: {e}")
+        await asyncio.sleep(3.5)
+
+# ===================== UI =====================
 def main_menu() -> InlineKeyboardMarkup:
     status = "🟢 TEST MODE ON" if TEST_MODE else "🔴 TEST MODE OFF"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Format", callback_data="format")],
         [InlineKeyboardButton("💰 Sale", callback_data="sale")],
         [InlineKeyboardButton("🔄 Replace", callback_data="replace")],
-        [InlineKeyboardButton("🧪 Tester", callback_data="tester")],
+        [InlineKeyboardButton("🧪 Tester Drop", callback_data="tester")],
         [InlineKeyboardButton("⭐ BIN Manager", callback_data="rate")],
         [InlineKeyboardButton("💵 Balance", callback_data="balance")],
         [InlineKeyboardButton("📊 Statistics", callback_data="stats")],
@@ -268,39 +331,16 @@ POST_BUTTONS = InlineKeyboardMarkup([
 
 def get_session(uid: int) -> dict:
     if uid not in user_sessions:
-        user_sessions[uid] = {"mode":None,"cards":[],"filename":None,"customer":None,"target":0,"step":"idle","tester_type":None,"in_post_summary":False}
+        user_sessions[uid] = {
+            "mode": None, "cards": [], "filename": None, "customer": None,
+            "target": 0, "step": "idle", "tester_type": None, "in_post_summary": False
+        }
     return user_sessions[uid]
 
-# ===================== STORMCHECK API =====================
-async def submit_batch(cards: List[str]) -> Optional[str]:
-    if TEST_MODE or not API_KEY: return "test-batch-id"
-    url = f"{API_BASE}/check"
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, json={"cards": cards}, headers=headers, timeout=30)
-            resp.raise_for_status()
-            return resp.json().get("data", {}).get("batch_id")
-    except Exception as e:
-        logger.error(f"Stormcheck submit error: {e}")
-        return None
-
-async def poll_batch(batch_id: str, card_count: int):
-    if TEST_MODE or not batch_id: 
-        await asyncio.sleep(3)
-        return
-    polls = 3 if card_count <= 5 else 5 if card_count <= 10 else 8 if card_count <= 15 else min(25, card_count//2 + 6)
-    url = f"{API_BASE}/check/{batch_id}"
-    headers = {"Authorization": f"Bearer {API_KEY}"}
-    async with httpx.AsyncClient() as client:
-        for _ in range(polls):
-            try:
-                r = await client.get(url, headers=headers, timeout=25)
-                if r.status_code == 200 and not r.json().get("data", {}).get("is_checking", True):
-                    return
-            except:
-                pass
-            await asyncio.sleep(4)
+def get_stats(uid: int) -> dict:
+    if uid not in user_stats:
+        user_stats[uid] = {"cards_sold":0,"total_sales":0,"revenue":0.0,"profit":0.0,"testers_given":0,"replacements_given":0,"total_cards_checked":0}
+    return user_stats[uid]
 
 # ===================== HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -334,11 +374,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Cancelled.", reply_markup=main_menu())
         return
 
+    if action == "balance":
+        credits = await get_user_credits()
+        await query.edit_message_text(panel("BALANCE") + f"\nYour available Storm Credits: <b>{credits}</b>", parse_mode='HTML', reply_markup=main_menu())
+        return
+
+    if action == "stats":
+        s = get_stats(uid)
+        text = panel("STATISTICS") + f"""
+Cards Sold       : {s['cards_sold']}
+Total Sales      : {s['total_sales']}
+Revenue          : ${s['revenue']:.2f}
+Profit           : ${s['profit']:.2f}
+Testers Given    : {s['testers_given']}
+Replacements     : {s['replacements_given']}
+Cards Checked    : {s['total_cards_checked']}
+"""
+        await query.edit_message_text(text, reply_markup=main_menu())
+        return
+
     if action == "rate":
         await query.edit_message_text(panel("BIN MANAGER"), reply_markup=rate_menu())
-        return
-    if action == "back_main":
-        await query.edit_message_text(panel("FactoryVHQ Admin Panel"), reply_markup=main_menu())
         return
 
     session["mode"] = action
@@ -358,17 +414,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(panel("REPLACE MODE") + "\nWho is being replaced?")
         session["step"] = "waiting_customer"
     elif action == "tester":
-        await query.edit_message_text(panel("TESTER MODE") + "\nIs this a **Drop** or **Gift**?")
+        await query.edit_message_text(panel("TESTER DROP") + "\n\nIs this a **Drop** or a **Gift**?\n\nReply with: `Drop` or `Gift`")
         session["step"] = "waiting_tester_type"
-    elif action == "balance":
-        await query.edit_message_text(panel("BALANCE") + "\nYour available Storm Credits: <b>2847</b>", parse_mode='HTML', reply_markup=main_menu())
-    elif action == "stats":
-        s = get_stats(uid)
-        txt = panel("STATISTICS") + f"Cards Sold: {s['cards_sold']}\nTotal Sales: {s['total_sales']}\nRevenue: ${s['revenue']:.2f}\nProfit: ${s['profit']:.2f}\nTesters: {s['testers_given']}\nReplacements: {s['replacements_given']}\nChecked: {s['total_cards_checked']}"
-        await query.edit_message_text(txt, reply_markup=main_menu())
-
-    if action == "check":
-        await check_handler(update, context)
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -378,13 +425,17 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if session.get("step") == "waiting_tester_type":
         session["tester_type"] = text.capitalize()
-        await update.message.reply_text(panel("TESTER MODE") + "\nSend Cards or drop a .txt file.")
+        await update.message.reply_text(
+            panel("TESTER DROP") + 
+            f"\n\n✅ Mode set to: **{session['tester_type']}**\n\n"
+            "Now send cards or drop a .txt file."
+        )
         session["step"] = "waiting_cards"
         return
 
     if session.get("step") == "waiting_customer":
         session["customer"] = text
-        await update.message.reply_text("How many cards?")
+        await update.message.reply_text("How many cards is the customer purchasing?")
         session["step"] = "waiting_target"
         return
 
@@ -394,7 +445,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Target set.\nSend Cards or drop a .txt file.")
             session["step"] = "waiting_cards"
         except:
-            await update.message.reply_text("Please send a number.")
+            await update.message.reply_text("Please send a valid number.")
         return
 
     if session.get("step") in ["waiting_cards", "add_more"]:
@@ -412,10 +463,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if new_cards:
             session["cards"].extend(new_cards)
-            logger.info(f"Added {len(new_cards)} cards. Total now: {len(session['cards'])}")
+            logger.info(f"Added {len(new_cards)} cards. Total: {len(session['cards'])}")
             await show_pre_summary(update, session, uid)
         else:
-            await update.message.reply_text("⚠️ No valid cards detected.\nPlease check the format and try again.")
+            await update.message.reply_text("⚠️ No valid cards detected. Please check format.")
         return
 
     if session.get("step") == "removing_cards":
@@ -425,10 +476,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if session.get("step") == "waiting_filename":
         session["filename"] = text
         session["step"] = "idle"
-        if session.get("in_post_summary"):
-            await show_post_summary(None, session, uid)
-        else:
-            await show_pre_summary(update, session, uid)
+        await show_post_summary(None, session, uid)
         return
 
 async def show_pre_summary(update: Update, session: dict, uid: int):
@@ -441,6 +489,10 @@ Total USA     : {usa}
 Total Foreign : {count - usa}
 Mode          : {mode}
 """
+    if session.get("customer"):
+        text += f"Customer : {session['customer']}\n"
+    if session.get("target"):
+        text += f"Target   : {session['target']}\n"
     await update.message.reply_html(text, reply_markup=PRE_BUTTONS)
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -455,49 +507,68 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = len(session["cards"])
     mode = session.get("mode", "FORMAT").upper()
 
-    if TEST_MODE:
-        await query.edit_message_text(f"🔄 TEST MODE ENABLED\nMode: {mode}\nCards: {count}\n\nAll cards marked LIVE.")
-        await asyncio.sleep(2)
-    else:
-        await query.edit_message_text("Batch Has Successfully Been Submitted, Please Wait Up To 30 Seconds While We Beginning Quality Checking")
-        card_strings = [f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}|{c['name']}|{c['address']}|{c['city']}|{c['state']}|{c['zip']}|{c['country']}" for c in session["cards"]]
-        batch_id = await submit_batch(card_strings)
-        if batch_id:
-            await poll_batch(batch_id, count)
+    await query.edit_message_text("Batch Has Successfully Been Submitted, Please Wait Up To 30 Seconds While We Beginning Quality Checking")
+
+    card_strings = [f"{c['card']}|{c['mm']}{c['yy']}|{c['cvv']}|{c['name']}|{c['address']}|{c['city']}|{c['state']}|{c['zip']}|{c['country']}" for c in session["cards"]]
+    batch_id = await submit_batch_advanced(card_strings)
+    if batch_id:
+        await poll_batch_advanced(batch_id, count)
 
     session["in_post_summary"] = True
-    if not TEST_MODE:
-        get_stats(uid)["total_cards_checked"] += count
-
+    get_stats(uid)["total_cards_checked"] += count
     await show_post_summary(query, session, uid)
 
 async def show_post_summary(query, session: dict, uid: int):
     count = len(session["cards"])
     test_note = "\n\n(Test Mode - Stats Frozen)" if TEST_MODE else ""
+    mode = session.get("mode", "").lower()
+    stats = get_stats(uid)
+
+    if mode == "sale" and not TEST_MODE:
+        revenue = count * SALE_PRICE
+        profit = revenue - (count * CARD_COST)
+        stats["cards_sold"] += count
+        stats["total_sales"] += 1
+        stats["revenue"] += revenue
+        stats["profit"] += profit
+    elif mode == "replace" and not TEST_MODE:
+        stats["replacements_given"] += count
+        stats["profit"] -= (count * CARD_COST)
+    elif mode == "tester" and not TEST_MODE:
+        stats["testers_given"] += count
+
     text = panel("POST-SUMMARY") + f"""
 Total Cards : {count}
 Total Live  : {count}
 Total Dead  : 0
 Live Rate   : 100.0%{test_note}
 """
+    if mode in ["sale", "replace"]:
+        text += f"\nCustomer : {session.get('customer', 'N/A')}\nTarget Reached : True"
+
     await query.edit_message_text(text, parse_mode='HTML', reply_markup=POST_BUTTONS)
 
 async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid = query.from_user.id
     session = get_session(uid)
-    is_tester = session.get("mode") == "tester"
 
-    content = "\n\n".join(format_card(c, is_tester) for c in session["cards"])
-    customer = session.get("customer", "FactoryVHQ")
-    filename = session.get("filename") or f"Batch-{len(session['cards'])}-{random.randint(1000,9999)}"
+    if session.get("mode") == "tester":
+        content = "\n\n".join(format_tester_card(c) for c in session["cards"])
+        filename = f"FactoryVHQ-Tester-Drop-{len(session['cards'])}-{random.randint(1000,9999)}"
+        caption = "🔥 FactoryVHQ Tester Drop Sent 🔥"
+    else:
+        content = "\n\n".join(format_card(c) for c in session["cards"])
+        customer = session.get("customer", "FactoryVHQ")
+        filename = session.get("filename") or f"{customer}-{len(session['cards'])}-{random.randint(1000,9999)}"
+        caption = "✅ FactoryVHQ Output Generated"
 
     await query.message.reply_document(
         document=bytes(content, "utf-8"),
         filename=f"{filename}.txt",
-        caption="✅ FactoryVHQ Output Generated"
+        caption=caption
     )
-    await query.edit_message_text("✅ File sent successfully!", reply_markup=main_menu())
+    await query.edit_message_text("✅ Delivery Complete!", reply_markup=main_menu())
     user_sessions.pop(uid, None)
     save_data()
 
@@ -524,9 +595,10 @@ def rate_menu():
         [InlineKeyboardButton("Set Balance Rating", callback_data="set_balance")],
         [InlineKeyboardButton("Set Suggestion", callback_data="set_suggestion")],
         [InlineKeyboardButton("Force VR", callback_data="force_vr")],
-        [InlineKeyboardButton("← Back", callback_data="back_main")]
+        [InlineKeyboardButton("← Back to Panel", callback_data="back_main")]
     ])
 
+# ===================== MAIN =====================
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -534,7 +606,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v13.8 - ULTRA ADVANCED PARSER DEPLOYED")
+    print("🚀 FactoryVHQ v14.0 - FULLY ADVANCED | PARSER + API + BRANDING")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
