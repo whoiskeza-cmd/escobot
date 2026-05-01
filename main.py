@@ -107,16 +107,19 @@ def post_keyboard(has_extra=False):
     kb.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     return InlineKeyboardMarkup(kb)
 
-# ====================== PARSER ======================
+# ====================== PARSER (Improved) ======================
 def parse_card(line: str) -> Optional[dict]:
     try:
+        # Remove LIVE tag and anything after =>
         line = re.split(r'\s*(?:LIVE|=>|stormcheck)', line, flags=re.IGNORECASE)[0].strip()
         line = re.sub(r'\s*\|\s*', '|', line)
         line = re.sub(r'\|+', '|', line).strip('|')
         parts = line.split('|')
         if len(parts) < 4: return None
+
         card = re.sub(r'\D', '', parts[0])
         if len(card) < 13: return None
+
         return {
             "card": card,
             "mm": parts[1].strip().zfill(2),
@@ -132,7 +135,8 @@ def parse_card(line: str) -> Optional[dict]:
             "email": parts[11].strip() if len(parts) > 11 else "N/A",
             "raw": f"{card}|{parts[1].strip().zfill(2)}|{parts[2].strip()[-2:].zfill(2)}|{re.sub(r'\D', '', parts[3]) or '000'}"
         }
-    except:
+    except Exception as e:
+        logger.error(f"Parse failed on: {line} | Error: {e}")
         return None
 
 def get_bin_info(card: str):
@@ -148,7 +152,7 @@ def get_random_ip() -> str:
 
 def format_live_card(card: dict, is_tester: bool = False, forced_vr: Optional[int] = None) -> str:
     info = get_bin_info(card["card"])
-    bin_data = BIN_RATER.get(card["card"][:6])
+    bin_data = BIN_RATER.get(card["card"][:6], {"rating": "N/A", "suggestion": "No suggestion set"})
     vr = forced_vr if forced_vr is not None else random.randint(88, 98)
     balance = get_random_balance(info.get("type") == "CREDIT")
     label = "Available Credit" if info.get("type") == "CREDIT" else "Balance"
@@ -183,7 +187,7 @@ def format_live_card(card: dict, is_tester: bool = False, forced_vr: Optional[in
         lines.append("❤️ Thank You For Choosing FactoryVHQ ❤️")
     return "\n".join(lines)
 
-# ====================== STORMCHECK (Longer Polling) ======================
+# ====================== STORMCHECK ======================
 async def submit_to_storm(cards: List[str]):
     if TEST_MODE: return "test-batch-999999"
     try:
@@ -210,6 +214,8 @@ async def poll_batch(batch_id: str, status_msg, total_cards: int, uid: int):
         quote = QUALITY_QUOTES[i % len(QUALITY_QUOTES)]
         progress = int((i + 1) / polls * 100)
         await status_msg.edit_text(f"🔄 Quality Checking... {progress}%\n\n{quote}\nLive Found: {len(live_cards)}")
+
+    # CRITICAL FIX: In TEST_MODE, ALL parsed cards are returned as LIVE
     if TEST_MODE:
         live_cards = user_sessions[uid].get("current_cards", [])[:]
     return live_cards
@@ -301,14 +307,14 @@ Replacements   : {s['replacements']}
     await handle_action(update, context, data)
     return MENU
 
-# ====================== MESSAGE HANDLER (Full Rate System) ======================
+# ====================== MESSAGE HANDLER ======================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in AUTHORIZED_USERS: return
     text = update.message.text.strip()
     session = user_sessions[uid]
 
-    # ==================== RATE BIN SYSTEM ====================
+    # Rate BIN System
     if session.get("rate_step"):
         step = session["rate_step"]
         if step in ["set_vr", "rate_bin", "set_balance", "set_suggestion", "force_vr"]:
@@ -331,7 +337,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 session["rate_step"] = "force_vr_value"
             return BIN_INPUT
 
-        # Final values
         bin6 = session.get("current_bin")
         if step == "set_vr_value":
             BIN_RATER[bin6]["rating"] = text
@@ -357,7 +362,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session["current_bin"] = None
         return MENU
 
-    # ==================== SALE / REPLACE / TESTER FLOW ====================
+    # Sale / Replace / Tester flow
     if session.get("mode") in ("sale", "replace") and not session.get("customer"):
         session["customer"] = text
         await update.message.reply_text(f"How many cards is **{text}** purchasing / needs replaced?")
@@ -377,7 +382,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Send Cards Or Drop .txt File To Continue")
         return COLLECTING
 
-    # ==================== CARD COLLECTION ====================
+    # Card Collection
     new_cards = []
     if update.message.document:
         file = await update.message.document.get_file()
@@ -392,7 +397,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if new_cards:
         session["cards"].extend(new_cards)
-        session["current_cards"] = session["cards"][:]
+        session["current_cards"] = session["cards"][:]   # Important for TEST_MODE
         usa = sum(1 for c in session["cards"] if c.get("country", "").upper() in ["US", "USA", "UNITED STATES"])
         session["usa"] = usa
         session["foreign"] = len(session["cards"]) - usa
@@ -559,7 +564,7 @@ def main():
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("🚀 FactoryVHQ v22.1 - FULL COMPLETE VERSION (All Features Included)")
+    print("🚀 FactoryVHQ v22.2 - Live Detection Fixed (TEST_MODE now returns all cards as LIVE)")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
