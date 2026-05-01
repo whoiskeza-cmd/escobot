@@ -47,7 +47,7 @@ async def load_binlist_from_github():
             BIN_DATABASE = resp.json()
             logger.info(f"✅ Loaded {len(BIN_DATABASE)} BINs from GitHub")
     except Exception as e:
-        logger.error(f"GitHub BIN load failed: {e}")
+        logger.error(f"GitHub load failed: {e}")
         BIN_DATABASE = get_default_bins()
 
 def get_default_bins():
@@ -67,7 +67,7 @@ def get_default_bins():
         "546616": {"bank": "CITIBANK N.A.", "brand": "MASTERCARD", "level": "WORLD", "rating": 93, "suggestion": "Luxury", "type": "CREDIT"},
     }
 
-# ===================== CARD PARSER =====================
+# ===================== CORE FUNCTIONS =====================
 def parse_card(line: str) -> Optional[dict]:
     if not line: return None
     try:
@@ -205,8 +205,7 @@ def get_stats(uid: int) -> dict:
 async def submit_batch_advanced(cards: List[str]) -> Optional[str]:
     if TEST_MODE:
         return "test-batch-id-999999"
-    if not API_KEY:
-        return None
+    if not API_KEY: return None
     try:
         async with httpx.AsyncClient(timeout=25) as client:
             resp = await client.post(
@@ -228,7 +227,7 @@ async def poll_batch(batch_id: str, card_count: int):
     for _ in range(polls):
         await asyncio.sleep(3.5)
 
-# ===================== START & MENU =====================
+# ===================== START & CANCEL =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ Access Denied.")
@@ -242,7 +241,19 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_sessions.pop(update.effective_user.id, None)
     await update.message.reply_text("✅ Returned to Admin Panel.", reply_markup=main_menu())
 
-# ===================== BUTTON & MESSAGE HANDLERS =====================
+# ===================== RATE SYSTEM =====================
+async def rate_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Set BIN VR", callback_data="set_vr")],
+        [InlineKeyboardButton("Rate BIN", callback_data="rate_bin")],
+        [InlineKeyboardButton("Set Balance Rating", callback_data="set_balance")],
+        [InlineKeyboardButton("Set Suggestion", callback_data="set_suggestion")],
+        [InlineKeyboardButton("Force VR", callback_data="force_vr")],
+        [InlineKeyboardButton("Back to Menu", callback_data="back_main")]
+    ])
+    await update.callback_query.edit_message_text("⭐ BIN Management System", reply_markup=keyboard)
+
+# ===================== MAIN BUTTON HANDLER =====================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -250,35 +261,41 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = query.from_user.id
     session = get_session(uid)
 
+    if action == "rate":
+        await rate_handler(update, context)
+        return
     if action == "check":
         await check_handler(update, context)
         return
     if action == "send_file":
         await send_file_handler(update, context)
         return
-    if action == "add_more":
-        session["step"] = "add_more"
-        await query.edit_message_text("Please send more cards or drop another .txt file.")
-        return
-    if action == "remove_cards":
-        session["step"] = "removing_cards"
-        await query.edit_message_text("Send last 4 digits of the card(s) you want to remove, separated by commas.")
-        return
-    if action == "set_filename":
-        session["step"] = "waiting_filename"
-        await query.edit_message_text("Send new filename (without .txt):")
-        return
-    if action == "toggle_test":
-        global TEST_MODE
-        TEST_MODE = not TEST_MODE
-        await query.edit_message_text(f"Test Mode: {'🟢 ON' if TEST_MODE else '🔴 OFF'}", reply_markup=main_menu())
-        return
-    if action == "cancel":
-        user_sessions.pop(uid, None)
-        await query.edit_message_text("✅ Cancelled.", reply_markup=main_menu())
-        return
+    if action in ["add_more", "remove_cards", "set_filename", "cancel", "toggle_test", "back_main"]:
+        if action == "back_main":
+            await query.edit_message_text(panel("FactoryVHQ Admin Panel"), reply_markup=main_menu())
+            return
+        if action == "toggle_test":
+            global TEST_MODE
+            TEST_MODE = not TEST_MODE
+            await query.edit_message_text(f"Test Mode: {'🟢 ON' if TEST_MODE else '🔴 OFF'}", reply_markup=main_menu())
+            return
+        if action == "cancel":
+            user_sessions.pop(uid, None)
+            await query.edit_message_text("✅ Cancelled.", reply_markup=main_menu())
+            return
+        if action == "add_more":
+            session["step"] = "add_more"
+            await query.edit_message_text("Send more cards or drop another .txt file.")
+            return
+        if action == "remove_cards":
+            session["step"] = "removing_cards"
+            await query.edit_message_text("Send last 4 digits separated by commas:")
+            return
+        if action == "set_filename":
+            session["step"] = "waiting_filename"
+            await query.edit_message_text("Send new filename (without .txt):")
+            return
 
-    # Start new feature
     session["mode"] = action
     session["cards"] = []
     session["filename"] = None
@@ -299,12 +316,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(panel("TESTER MODE") + "\n\nIs this a **Drop** or a **Gift**?\n\nReply with: `Drop` or `Gift`")
         session["step"] = "waiting_tester_type"
     elif action == "balance":
-        await handle_balance(update, context)
+        await handle_balance(query)
     elif action == "stats":
-        await handle_stats(update, context)
-    elif action == "rate":
-        await query.edit_message_text("⭐ Rate feature coming in next update.")
+        await handle_stats(query, uid)
 
+# ===================== MESSAGE HANDLER =====================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ADMIN_IDS: return
@@ -313,13 +329,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if session.get("step") == "waiting_tester_type":
         session["tester_type"] = text.capitalize()
-        await update.message.reply_text(panel("TESTER MODE") + f"\n\n✅ Mode set to: **{session['tester_type']}**\n\nSend cards or drop a .txt file.")
+        await update.message.reply_text(panel("TESTER MODE") + f"\n✅ Mode set to: **{session['tester_type']}**\n\nSend cards or drop a .txt file.")
         session["step"] = "waiting_cards"
         return
 
     if session.get("step") == "waiting_customer":
         session["customer"] = text
-        await update.message.reply_text("How many cards is this customer purchasing/replacing?")
+        await update.message.reply_text("How many cards?")
         session["step"] = "waiting_target"
         return
 
@@ -338,12 +354,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file = await update.message.document.get_file()
             content = (await file.download_as_bytearray()).decode("utf-8", errors="ignore")
             for line in content.splitlines():
-                if c := parse_card(line):
-                    new_cards.append(c)
+                if c := parse_card(line): new_cards.append(c)
         else:
             for line in text.splitlines():
-                if c := parse_card(line):
-                    new_cards.append(c)
+                if c := parse_card(line): new_cards.append(c)
 
         if new_cards:
             session["cards"].extend(new_cards)
@@ -362,20 +376,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_post_summary(None, session, uid)
         return
 
+# ===================== PRE & POST SUMMARY =====================
 async def show_pre_summary(update: Update, session: dict):
     count = len(session["cards"])
-    usa = sum(1 for c in session["cards"] if c.get("country", "US").upper() in ["US", "USA"])
-    mode = session.get("mode", "FORMAT").upper()
+    usa = sum(1 for c in session["cards"] if c.get("country","US").upper() in ["US","USA"])
+    mode = session.get("mode","FORMAT").upper()
     text = panel(f"{mode} PRE-SUMMARY") + f"""
 Total Cards   : {count}
 Total USA     : {usa}
 Total Foreign : {count - usa}
 Mode          : {mode}
 """
-    if session.get("customer"):
-        text += f"Customer      : {session['customer']}\n"
-    if session.get("target"):
-        text += f"Target        : {session['target']}\n"
+    if session.get("customer"): text += f"Customer : {session['customer']}\n"
+    if session.get("target"): text += f"Target   : {session['target']}\n"
     await update.message.reply_html(text, reply_markup=PRE_BUTTONS)
 
 async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -384,7 +397,7 @@ async def check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = get_session(uid)
 
     if not session.get("cards"):
-        await query.edit_message_text("❌ No cards to check.")
+        await query.edit_message_text("❌ No cards found.")
         return
 
     await query.edit_message_text("Batch Has Successfully Been Submitted, Please Wait Up To 30 Seconds While We Beginning Quality Checking")
@@ -407,27 +420,48 @@ Total Live  : {count}
 Total Dead  : 0
 Live Rate   : 100.0%{test_note}
 """
+    if session.get("mode") in ["sale", "replace"]:
+        target = session.get("target", 0)
+        extras = max(0, count - target)
+        text += f"\nTarget Reached : {'True' if count >= target else 'False'}"
+        text += f"\nExtras         : {extras}"
     await query.edit_message_text(text, parse_mode='HTML', reply_markup=POST_BUTTONS)
 
+# ===================== SEND FILE =====================
 async def send_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid = query.from_user.id
     session = get_session(uid)
     mode = session.get("mode")
+    cards = session.get("cards", [])
 
     if mode == "tester":
-        content = "\n\n".join(format_card(c, is_tester=True) for c in session["cards"])
-        filename = f"FactoryVHQ-Tester-{len(session['cards'])}-{random.randint(1000,9999)}"
+        content = "\n\n".join(format_card(c, is_tester=True) for c in cards)
+        filename = f"FactoryVHQ-Tester-{len(cards)}-{random.randint(1000,9999)}"
         caption = "🔥 FactoryVHQ Tester Drop Sent 🔥"
+        get_stats(uid)["testers_given"] += 1
     elif mode == "sale":
-        live = len(session["cards"])
-        customer = session.get("customer", "Customer")
+        customer = session.get("customer", "Unknown")
+        live = len(cards)
         filename = f"{customer}-{live}-{random.randint(1000,9999)}"
-        content = "\n\n".join(format_card(c) for c in session["cards"])
+        content = "\n\n".join(format_card(c) for c in cards)
         caption = f"✅ Sale to {customer} completed"
+        s = get_stats(uid)
+        s["cards_sold"] += live
+        s["total_sales"] += 1
+        s["revenue"] += live * 25.0
+        s["profit"] += live * (25.0 - 8.0)
+    elif mode == "replace":
+        customer = session.get("customer", "Unknown")
+        live = len(cards)
+        filename = f"{customer}-Replace-{live}-{random.randint(1000,9999)}"
+        content = "\n\n".join(format_card(c) for c in cards)
+        caption = f"✅ Replacement for {customer} sent"
+        get_stats(uid)["replacements_given"] += 1
+        get_stats(uid)["profit"] -= live * 8.0
     else:
-        content = "\n\n".join(format_card(c) for c in session["cards"])
-        filename = session.get("filename") or f"Batch-{len(session['cards'])}-{random.randint(1000,9999)}"
+        content = "\n\n".join(format_card(c) for c in cards)
+        filename = session.get("filename") or f"Batch-{len(cards)}-{random.randint(1000,9999)}"
         caption = "✅ FactoryVHQ Output Generated"
 
     await query.message.reply_document(
@@ -454,30 +488,30 @@ async def process_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Invalid input.")
 
-async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_balance(query):
     if TEST_MODE:
-        await update.callback_query.edit_message_text("🟢 Test Mode Active\nAvailable Storm Credits: 999999")
+        await query.edit_message_text("🟢 Test Mode Active\nAvailable Storm Credits: **999999**", parse_mode='Markdown')
         return
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(f"{API_BASE}/user", headers={"Authorization": f"Bearer {API_KEY}"})
             credits = r.json().get("data", {}).get("credits", 0)
-            await update.callback_query.edit_message_text(f"Your Available Storm Credits Are: **{credits}**", parse_mode='Markdown')
+            await query.edit_message_text(f"Your Available Storm Credits Are: **{credits}**", parse_mode='Markdown')
     except:
-        await update.callback_query.edit_message_text("Failed to fetch balance.")
+        await query.edit_message_text("Failed to fetch balance.")
 
-async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    s = get_stats(update.callback_query.from_user.id)
+async def handle_stats(query, uid):
+    s = get_stats(uid)
     text = panel("STATISTICS") + f"""
-Cards Sold     : {s['cards_sold']}
-Total Sales    : {s['total_sales']}
-Revenue        : ${s['revenue']:.2f}
-Profit         : ${s['profit']:.2f}
-Testers Given  : {s['testers_given']}
-Replacements   : {s['replacements_given']}
-Cards Checked  : {s['total_cards_checked']}
+Cards Sold      : {s['cards_sold']}
+Total Sales     : {s['total_sales']}
+Revenue         : ${s['revenue']:.2f}
+Profit          : ${s['profit']:.2f}
+Testers Given   : {s['testers_given']}
+Replacements    : {s['replacements_given']}
+Cards Checked   : {s['total_cards_checked']}
 """
-    await update.callback_query.edit_message_text(text, reply_markup=main_menu())
+    await query.edit_message_text(text, reply_markup=main_menu())
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -488,7 +522,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, message_handler))
 
     asyncio.get_event_loop().run_until_complete(load_binlist_from_github())
-    print("🚀 FactoryVHQ v15.0 - Full Advanced Version Ready")
+    print("🚀 FactoryVHQ v15.1 - FULL SYSTEM WITH ALL FEATURES")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
