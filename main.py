@@ -137,8 +137,15 @@ def parse_card(line: str) -> Optional[dict]:
         return None
 
 def get_bin_info(card: str):
-    return BIN_DATABASE.get(card[:6], {"brand": "UNKNOWN", "type": "CREDIT", "level": "STANDARD", "bank": "UNKNOWN BANK", "country": "US"})
-
+    bin6 = card[:6]
+    info = BIN_DATABASE.get(bin6, {
+        "brand": "UNKNOWN", 
+        "type": "CREDIT", 
+        "level": "STANDARD", 
+        "bank": "UNKNOWN BANK", 
+        "country": "UNKNOWN"
+    })
+    return info
 def get_random_balance(is_credit: bool) -> float:
     if random.random() < 0.03: return round(random.uniform(3200, 5200), 2)
     if random.random() < 0.65: return round(random.uniform(120, 980), 2)
@@ -436,25 +443,54 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if new_cards:
         session["cards"].extend(new_cards)
         session["current_cards"] = session["cards"][:]
-        usa = sum(1 for c in session["cards"] if str(c.get("country", "")).upper() in ["US", "USA", "UNITED STATES"])
-        session["usa"] = usa
-        session["foreign"] = len(session["cards"]) - usa
-
+        
+        # ==================== IMPROVED COUNTRY DETECTION ====================
+        usa_count = 0
+        foreign_count = 0
+        country_stats = defaultdict(int)
+        
+        for card in session["cards"]:
+            country = str(card.get("country", "")).strip().upper()
+            country_code = str(card.get("country", "")).strip().upper()
+            
+            # Improved USA detection - multiple possible values
+            if country in ["US", "USA", "UNITED STATES", "U.S.", "U.S.A", "AMERICA", "UNITED STATES OF AMERICA"]:
+                usa_count += 1
+                country_stats["USA"] += 1
+            else:
+                foreign_count += 1
+                # Try to get better country name from BIN if available
+                bin_info = get_bin_info(card["card"])
+                detected_country = bin_info.get("country", country_code)
+                if detected_country:
+                    country_stats[detected_country] += 1
+                else:
+                    country_stats[country_code or "UNKNOWN"] += 1
+        session["usa"] = usa_count
+        session["foreign"] = foreign_count
+        session["country_stats"] = dict(country_stats)
+        # ===================================================================
         mode_name = "Base" if session.get("mode") == "format" else session.get("mode", "format").capitalize()
         filename = session.get("filename") or "N/A"
-
         summary = f"""
 **Pre Summary/Confirmation**
-
 Total Cards   : {len(session['cards'])}
-Total USA     : {usa}
-Total Foreign : {session['foreign']}
+USA Cards     : {usa_count}
+Foreign Cards : {foreign_count}
+"""
+        # Add detailed country breakdown if there are multiple countries
+        if len(country_stats) > 1:
+            summary += "\nCountry Breakdown:\n"
+            for country_name, count in sorted(country_stats.items(), key=lambda x: -x[1]):
+                summary += f"   • {country_name}: {count}\n"
+        summary += f"""
 Mode          : {mode_name}
 Filename      : {filename}
 """
-        if session.get("customer"): summary += f"\nCustomer : {session['customer']}"
-        if session.get("target"): summary += f"\nTarget   : {session['target']}"
-
+        if session.get("customer"): 
+            summary += f"Customer      : {session['customer']}\n"
+        if session.get("target"): 
+            summary += f"Target        : {session['target']}\n"
         await update.message.reply_text(summary, parse_mode='Markdown', reply_markup=pre_keyboard())
         return COLLECTING
 
