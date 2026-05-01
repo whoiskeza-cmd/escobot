@@ -19,7 +19,7 @@ logger = logging.getLogger("FactoryVHQ")
 
 # ====================== RAILWAY CONFIG ======================
 TOKEN = os.getenv("TOKEN")
-BASE_URL = os.getenv("BASE_URL", "https://api.storm.gift/api/v1")
+BASE_URL = "https://api.storm.gift/api/v1"
 API_KEY = os.getenv("API_KEY")
 TEST_MODE = os.getenv("TEST_MODE", "False").lower() == "true"
 BUY_COST = float(os.getenv("BUY_COST", 1.40))
@@ -107,19 +107,16 @@ def post_keyboard(has_extra=False):
     kb.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     return InlineKeyboardMarkup(kb)
 
-# ====================== PARSER (Improved) ======================
+# ====================== PARSER ======================
 def parse_card(line: str) -> Optional[dict]:
     try:
-        # Remove LIVE tag and anything after =>
         line = re.split(r'\s*(?:LIVE|=>|stormcheck)', line, flags=re.IGNORECASE)[0].strip()
         line = re.sub(r'\s*\|\s*', '|', line)
         line = re.sub(r'\|+', '|', line).strip('|')
         parts = line.split('|')
         if len(parts) < 4: return None
-
         card = re.sub(r'\D', '', parts[0])
         if len(card) < 13: return None
-
         return {
             "card": card,
             "mm": parts[1].strip().zfill(2),
@@ -136,7 +133,7 @@ def parse_card(line: str) -> Optional[dict]:
             "raw": f"{card}|{parts[1].strip().zfill(2)}|{parts[2].strip()[-2:].zfill(2)}|{re.sub(r'\D', '', parts[3]) or '000'}"
         }
     except Exception as e:
-        logger.error(f"Parse failed on: {line} | Error: {e}")
+        logger.error(f"Parse failed: {line} | {e}")
         return None
 
 def get_bin_info(card: str):
@@ -187,38 +184,62 @@ def format_live_card(card: dict, is_tester: bool = False, forced_vr: Optional[in
         lines.append("❤️ Thank You For Choosing FactoryVHQ ❤️")
     return "\n".join(lines)
 
-# ====================== STORMCHECK ======================
+# ====================== STORMCHECK API INTEGRATION ======================
 async def submit_to_storm(cards: List[str]):
-    if TEST_MODE: return "test-batch-999999"
+    if TEST_MODE:
+        return "test-batch-999999"
     try:
         async with httpx.AsyncClient(timeout=45) as client:
-            r = await client.post(f"{BASE_URL}/check",
-                                  headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"},
-                                  json={"cards": cards})
-            if r.status_code in (200, 201):
-                return r.json().get("batch_id")
+            response = await client.post(
+                f"{BASE_URL}/check",
+                headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"},
+                json={"cards": cards}
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("data", [{}])[0].get("id") if isinstance(data.get("data"), list) else data.get("data", {}).get("id")
     except Exception as e:
-        logger.error(f"Stormcheck error: {e}")
-    return None
+        logger.error(f"Submit to Stormcheck failed: {e}")
+        return None
+
+async def get_batch_result(batch_id: str):
+    if TEST_MODE or not batch_id:
+        return {"live_count": len(user_sessions.get(0, {}).get("current_cards", [])), "dead_count": 0}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(
+                f"{BASE_URL}/check/{batch_id}",
+                headers={"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            result = data.get("data", [{}])[0] if isinstance(data.get("data"), list) else data.get("data", {})
+            return {
+                "live_count": result.get("live_count", 0),
+                "dead_count": result.get("dead_count", 0)
+            }
+    except Exception as e:
+        logger.error(f"Polling batch {batch_id} failed: {e}")
+        return {"live_count": 0, "dead_count": 0}
 
 async def poll_batch(batch_id: str, status_msg, total_cards: int, uid: int):
-    if total_cards <= 5: polls, delay = 3, 18
-    elif total_cards <= 10: polls, delay = 5, 20
-    elif total_cards <= 15: polls, delay = 8, 22
-    elif total_cards <= 30: polls, delay = 12, 25
-    else: polls, delay = 18, 28
+    if total_cards <= 5: polls, delay = 4, 15
+    elif total_cards <= 10: polls, delay = 6, 18
+    elif total_cards <= 15: polls, delay = 9, 20
+    elif total_cards <= 30: polls, delay = 12, 22
+    else: polls, delay = 16, 25
 
-    live_cards = []
     for i in range(polls):
         await asyncio.sleep(delay)
+        result = await get_batch_result(batch_id)
+        live_count = result.get("live_count", 0)
         quote = QUALITY_QUOTES[i % len(QUALITY_QUOTES)]
         progress = int((i + 1) / polls * 100)
-        await status_msg.edit_text(f"🔄 Quality Checking... {progress}%\n\n{quote}\nLive Found: {len(live_cards)}")
+        await status_msg.edit_text(f"🔄 Quality Checking... {progress}%\n\n{quote}\nLive Found: {live_count}")
 
-    # CRITICAL FIX: In TEST_MODE, ALL parsed cards are returned as LIVE
-    if TEST_MODE:
-        live_cards = user_sessions[uid].get("current_cards", [])[:]
-    return live_cards
+    final_result = await get_batch_result(batch_id)
+    live_count = final_result.get("live_count", 0)
+    return user_sessions[uid].get("current_cards", [])[:live_count]
 
 # ====================== START ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -314,7 +335,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     session = user_sessions[uid]
 
-    # Rate BIN System
     if session.get("rate_step"):
         step = session["rate_step"]
         if step in ["set_vr", "rate_bin", "set_balance", "set_suggestion", "force_vr"]:
@@ -324,16 +344,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"You have selected BIN **{bin6}**\nWhat do you want to set the VR rating as? (e.g. 94)")
                 session["rate_step"] = "set_vr_value"
             elif step == "rate_bin":
-                await update.message.reply_text(f"You have selected BIN **{bin6}**\nRate this BIN (e.g. Excellent/Good/Average):")
+                await update.message.reply_text(f"You have selected BIN **{bin6}**\nRate this BIN:")
                 session["rate_step"] = "rate_bin_value"
             elif step == "set_balance":
-                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Balance Rating (e.g. High/Medium/Low):")
+                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Balance Rating:")
                 session["rate_step"] = "set_balance_value"
             elif step == "set_suggestion":
-                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Suggestion (Where to use this BIN):")
+                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Suggestion:")
                 session["rate_step"] = "set_suggestion_value"
             elif step == "force_vr":
-                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Forced VR (Send number or 'reset'):")
+                await update.message.reply_text(f"You have selected BIN **{bin6}**\nSet Forced VR (number or 'reset'):")
                 session["rate_step"] = "force_vr_value"
             return BIN_INPUT
 
@@ -353,16 +373,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif step == "force_vr_value":
             if text.lower() == "reset":
                 FORCED_VR.pop(bin6, None)
-                await update.message.reply_text(f"✅ Forced VR for BIN {bin6} has been reset.", reply_markup=main_menu())
+                await update.message.reply_text(f"✅ Forced VR for BIN {bin6} reset.", reply_markup=main_menu())
             else:
                 FORCED_VR[bin6] = int(text)
                 await update.message.reply_text(f"✅ Forced VR for BIN {bin6} set to {text}%", reply_markup=main_menu())
-
         session["rate_step"] = None
         session["current_bin"] = None
         return MENU
 
-    # Sale / Replace / Tester flow
     if session.get("mode") in ("sale", "replace") and not session.get("customer"):
         session["customer"] = text
         await update.message.reply_text(f"How many cards is **{text}** purchasing / needs replaced?")
@@ -382,7 +400,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Send Cards Or Drop .txt File To Continue")
         return COLLECTING
 
-    # Card Collection
     new_cards = []
     if update.message.document:
         file = await update.message.document.get_file()
@@ -397,7 +414,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if new_cards:
         session["cards"].extend(new_cards)
-        session["current_cards"] = session["cards"][:]   # Important for TEST_MODE
+        session["current_cards"] = session["cards"][:]
         usa = sum(1 for c in session["cards"] if c.get("country", "").upper() in ["US", "USA", "UNITED STATES"])
         session["usa"] = usa
         session["foreign"] = len(session["cards"]) - usa
@@ -564,7 +581,8 @@ def main():
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("🚀 FactoryVHQ v22.2 - Live Detection Fixed (TEST_MODE now returns all cards as LIVE)")
+    print("🚀 FactoryVHQ v22.4 - Full File | Real Stormcheck API Mode")
+    print(f"TEST_MODE: {TEST_MODE} | Using endpoint: {BASE_URL}/check")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
