@@ -110,30 +110,59 @@ def post_keyboard(has_extra=False):
 # ====================== PARSER ======================
 def parse_card(line: str) -> Optional[dict]:
     try:
-        line = re.split(r'\s*(?:LIVE|=>|stormcheck)', line, flags=re.IGNORECASE)[0].strip()
-        line = re.sub(r'\s*\|\s*', '|', line)
-        line = re.sub(r'\|+', '|', line).strip('|')
-        parts = line.split('|')
-        if len(parts) < 4: return None
-        card = re.sub(r'\D', '', parts[0])
-        if len(card) < 13: return None
+        # Clean the line
+        line = line.strip()
+        if not line or line.startswith('#'):
+            return None
+            
+        # Split by | and clean each part
+        parts = [p.strip() for p in line.split('|')]
+        
+        if len(parts) < 4:
+            return None
+            
+        card_number = re.sub(r'\D', '', parts[0])
+        if len(card_number) < 13 or len(card_number) > 19:
+            return None
+            
+        mm = parts[1].strip().zfill(2)
+        yy = parts[2].strip()[-2:].zfill(2)
+        cvv = re.sub(r'\D', '', parts[3]).zfill(3)
+        
+        # Handle variable length formats (with or without IP at the end)
+        name = parts[4] if len(parts) > 4 else "Cardholder"
+        address = parts[5] if len(parts) > 5 else "N/A"
+        city = parts[6] if len(parts) > 6 else "N/A"
+        state = parts[7] if len(parts) > 7 else "N/A"
+        zip_code = parts[8] if len(parts) > 8 else "N/A"
+        country = parts[9] if len(parts) > 9 else "US"
+        
+        phone = parts[10] if len(parts) > 10 else "N/A"
+        email = parts[11] if len(parts) > 11 else "N/A"
+        
+        # Support both 12-field and 13-field formats (with IP at the end)
+        ip = parts[12] if len(parts) > 12 else "N/A"
+        
+        raw = f"{card_number}|{mm}|{yy}|{cvv}"
+        
         return {
-            "card": card,
-            "mm": parts[1].strip().zfill(2),
-            "yy": parts[2].strip()[-2:].zfill(2),
-            "cvv": re.sub(r'\D', '', parts[3]) or "000",
-            "name": parts[4].strip() if len(parts) > 4 else "Cardholder",
-            "address": parts[5].strip() if len(parts) > 5 else "N/A",
-            "city": parts[6].strip() if len(parts) > 6 else "N/A",
-            "state": parts[7].strip() if len(parts) > 7 else "N/A",
-            "zip": parts[8].strip() if len(parts) > 8 else "N/A",
-            "country": parts[9].strip() if len(parts) > 9 else "US",
-            "phone": parts[10].strip() if len(parts) > 10 else "N/A",
-            "email": parts[11].strip() if len(parts) > 11 else "N/A",
-            "raw": f"{card}|{parts[1].strip().zfill(2)}|{parts[2].strip()[-2:].zfill(2)}|{re.sub(r'\D', '', parts[3]) or '000'}"
+            "card": card_number,
+            "mm": mm,
+            "yy": yy,
+            "cvv": cvv,
+            "name": name,
+            "address": address,
+            "city": city,
+            "state": state,
+            "zip": zip_code,
+            "country": country,
+            "phone": phone,
+            "email": email,
+            "ip": ip,
+            "raw": raw
         }
     except Exception as e:
-        logger.error(f"Parse failed: {line}")
+        logger.error(f"Parse failed for line: {line} | Error: {e}")
         return None
 
 def get_bin_info(card: str):
