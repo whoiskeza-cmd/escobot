@@ -9,13 +9,19 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 
 # ================== CONFIG FROM RAILWAY ==================
 TOKEN = os.getenv("TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID", 0))
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
-# Stats per admin
+# Allow both Owner and Admins
+AUTHORIZED_IDS = set(ADMIN_IDS)
+if OWNER_ID > 0:
+    AUTHORIZED_IDS.add(OWNER_ID)
+
+# Stats (Owner and Admins have separate stats)
 stats = {uid: {
     "cards_sold": 0, "total_sales": 0, "revenue": 0.0,
     "testers_given": 0, "replacements_given": 0, "profit": 0.0
-} for uid in ADMIN_IDS}
+} for uid in AUTHORIZED_IDS}
 
 user_sessions = {}
 
@@ -78,13 +84,12 @@ def format_live_card(card_data: dict, is_tester: bool = False):
         lines.append("❤️ Thank You For Choosing FactoryVHQ ❤️")
     return "\n".join(lines)
 
-# Parser - Supports both old | format and your new multi-line format
 def parse_card_block(lines):
     block = [line.strip() for line in lines if line.strip()]
     if not block:
         return None
 
-    # New multi-line format (the one you sent last)
+    # New multi-line format you provided
     if len(block) >= 8 and "/" in str(block[1]) and str(block[2]).isdigit():
         try:
             expiry = str(block[1]).split('/')
@@ -158,9 +163,11 @@ def post_buttons():
 
 # ================== HANDLERS ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("Unauthorized admin.")
+    user_id = update.effective_user.id
+    if user_id not in AUTHORIZED_IDS:
+        await update.message.reply_text("Unauthorized. Only Owner and Admins can use this bot.")
         return
+    
     await update.message.reply_text(
         f"**FactoryVHQ Admin Panel**\nWelcome @{update.effective_user.username}",
         reply_markup=main_menu(update.effective_user.username),
@@ -171,11 +178,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
-    if uid not in ADMIN_IDS:
+    if uid not in AUTHORIZED_IDS:
         return
 
     data = query.data
-    session = user_sessions.setdefault(uid, {"mode": None, "cards": [], "customer": "", "target": 0, "filename": None, "tester_type": None, "awaiting_remove": False, "awaiting_filename": False})
+    session = user_sessions.setdefault(uid, {
+        "mode": None, "cards": [], "customer": "", "target": 0, 
+        "filename": None, "tester_type": None, "awaiting_remove": False, 
+        "awaiting_filename": False
+    })
 
     if data == "cancel":
         session.clear()
@@ -197,7 +208,7 @@ Total Profit: ${s.get('profit', 0.0):.2f}"""
         return
 
     if data == "rate":
-        await query.edit_message_text("**Bin Rating Menu** (VR, Balance Rating, Suggestions)\n\nThis section can be expanded further if needed.")
+        await query.edit_message_text("**Bin Rating Menu**\n(Full VR, Balance Rating, and Suggestion features can be expanded on request)")
         return
 
     if data in ["format", "sale", "replace", "tester"]:
@@ -209,7 +220,7 @@ Total Profit: ${s.get('profit', 0.0):.2f}"""
         elif data == "tester":
             await query.edit_message_text("Is this Tester a **Drop** or **Gift**?")
         else:
-            await query.edit_message_text("Send cards in the new format or drop a .txt file.\nTest Mode: All cards will be marked **LIVE**.", 
+            await query.edit_message_text("Send cards using the new multi-line format or drop a .txt file.\n\nAll cards will be formatted as **LIVE** in Test Mode.", 
                                           reply_markup=pre_buttons())
         return
 
@@ -238,16 +249,17 @@ Total Profit: ${s.get('profit', 0.0):.2f}"""
 async def process_check(query, session, uid):
     await query.edit_message_text("Batch Has Successfully Been Submitted.\nPlease Wait Up To 30 Seconds While We Begin Quality Checking...\n\n(Test Mode - All cards are LIVE)")
 
-    await asyncio.sleep(4)
+    await asyncio.sleep(3)
 
     live_count = len(session["cards"])
-    post_text = f"**Post Summary/Confirmation**\n\nTotal Cards: {live_count}\nTotal Live: {live_count}\nTotal Dead: 0\nLive Rate: 100.00%\n\n"
+    post_text = f"**Post Summary/Confirmation**\n\n"
+    post_text += f"Total Cards: {live_count}\nTotal Live: {live_count}\nTotal Dead: 0\nLive Rate: 100.00%\n\n"
 
     if session["mode"] == "sale":
         target = session.get("target", live_count)
         extras = max(0, live_count - target)
         post_text += f"Target: {target}\nExtras: {extras}\nTarget Reached: True\n"
-        post_text += f"Profit Made: ${round(live_count * 6.70, 2)}\nTotal Revenue After Sale: ${round(live_count * 10.0, 2)}\n"
+        post_text += f"Profit Made: ${round(live_count * 6.7, 2)}\nTotal Revenue After Sale: ${round(live_count * 10.0, 2)}\n"
         stats[uid]["cards_sold"] += live_count
         stats[uid]["total_sales"] += 1
         stats[uid]["revenue"] += live_count * 10.0
@@ -283,12 +295,15 @@ async def send_formatted_file(query, session, uid):
         filename=filename,
         caption=f"✅ File Generated Successfully\nTotal Cards: {len(session['cards'])}\nMode: {session.get('mode','Format').capitalize()}"
     )
-    os.remove(filename)
+    try:
+        os.remove(filename)
+    except:
+        pass
     session.clear()
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if uid not in ADMIN_IDS:
+    if uid not in AUTHORIZED_IDS:
         return
 
     session = user_sessions.get(uid, {"mode": None, "cards": []})
@@ -307,25 +322,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Filename set to: **{text}**", parse_mode="Markdown", reply_markup=pre_buttons())
         return
 
-    # Handle flow for Sale, Replace, Tester
+    # Sale / Replace / Tester flow
     if session.get("mode") == "sale" and not session.get("customer"):
         session["customer"] = text
         await update.message.reply_text(f"How many cards is **{text}** purchasing? (Number only)")
         return
-    if session.get("mode") == "sale" and not session.get("target"):
-        if text.isdigit():
-            session["target"] = int(text)
-            await update.message.reply_text("**Target Set**\nSend cards or drop .txt file.", reply_markup=pre_buttons())
+    if session.get("mode") == "sale" and session.get("target", 0) == 0 and text.isdigit():
+        session["target"] = int(text)
+        await update.message.reply_text("**Target Set**\nSend cards or drop .txt file.", reply_markup=pre_buttons())
         return
 
     if session.get("mode") == "replace" and not session.get("customer"):
         session["customer"] = text
         await update.message.reply_text("How many cards are being replaced? (Number only)")
         return
-    if session.get("mode") == "replace" and not session.get("target"):
-        if text.isdigit():
-            session["target"] = int(text)
-            await update.message.reply_text("**Target Submitted**\nSend cards or drop .txt file.", reply_markup=pre_buttons())
+    if session.get("mode") == "replace" and session.get("target", 0) == 0 and text.isdigit():
+        session["target"] = int(text)
+        await update.message.reply_text("**Target Submitted**\nSend cards or drop .txt file.", reply_markup=pre_buttons())
         return
 
     if session.get("mode") == "tester" and not session.get("tester_type"):
@@ -333,7 +346,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Send cards or drop .txt file to continue.", reply_markup=pre_buttons())
         return
 
-    # Parse cards - supports your exact new format
+    # Parse cards (supports your exact format)
     lines = []
     if update.message.document:
         file = await update.message.document.get_file()
@@ -377,7 +390,7 @@ def main():
         print("ERROR: TOKEN environment variable is not set!")
         return
 
-    print("FactoryVHQ Bot Started - FULL TEST MODE (Balance button removed)")
+    print("FactoryVHQ Bot Started - FULL TEST MODE (Owner ID Restored)")
     
     app = Application.builder().token(TOKEN).build()
     
