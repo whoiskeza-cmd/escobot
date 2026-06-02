@@ -1,392 +1,289 @@
-import asyncio
+import telebot
 import random
 import os
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
+from collections import defaultdict
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# ================== CONFIG FROM RAILWAY ==================
-TOKEN = os.getenv("TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID", 0))
-ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
-
-AUTHORIZED_IDS = set(ADMIN_IDS)
-if OWNER_ID > 0:
-    AUTHORIZED_IDS.add(OWNER_ID)
-
-stats = {uid: {
-    "cards_sold": 0, "total_sales": 0, "revenue": 0.0,
-    "testers_given": 0, "replacements_given": 0, "profit": 0.0
-} for uid in AUTHORIZED_IDS}
-
-user_sessions = {}
-
-# ================== BIN DATA ==================
-BIN_DATA = {
-    "410039": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "TRADITIONAL", "country": "US", "rating": "9.2", "suggestion": "High Success - Use on Amazon"},
-    "410040": {"bank": "CITIBANK, N.A.- COSTCO", "brand": "VISA", "level": "BUSINESS", "country": "US", "rating": "8.7", "suggestion": "Good for high value"},
-    "414720": {"bank": "JPMORGAN CHASE BANK N.A.", "brand": "VISA", "level": "TRADITIONAL", "country": "US", "rating": "9.5", "suggestion": "Premium"},
-    "542418": {"bank": "CELTIC BANK CORPORATION", "brand": "MASTERCARD", "level": "PLATINUM", "country": "US", "rating": "9.1", "suggestion": "Excellent"},
+# === BIN FILTERING SYSTEM ===
+BIN_RULES = {
+    "MAGIC_USA": ["542418", "518941", "410039", "410040"],
+    "UHQ": ["542418", "410039", "534348", "410040", "546616", "521729", "513379", "400022"],
+    "MAGIC_FOREIGN": ["521729", "535636", "513379", "513646", "513647"],
+    "FRESH_FOREIGN": ["521729", "513379", "513646"],
+    "FRESH_UPDATE": ["410039", "546616", "440066", "400022", "483313", "483312", "515676", "534348", "542418"],
+    "SNIFFED": ["410039", "483313", "483312", "515676", "440066", "426684"],
+    "MEDIUM": ["410039", "542418", "440066", "513379", "483313", "521729", "513646", "400022", "534348"]
 }
 
-def get_bin_info(card: str):
-    return BIN_DATA.get(card[:6], {"bank": "UNKNOWN", "brand": "VISA", "level": "STANDARD", "country": "US", "rating": "7.5", "suggestion": "Standard Use"})
+PACK_PRIORITY = ["MAGIC_USA", "UHQ", "MAGIC_FOREIGN", "FRESH_FOREIGN", "FRESH_UPDATE", "SNIFFED", "MEDIUM"]
 
-def generate_vr(): 
-    return random.randint(78, 97)
+user_cards = {}
+user_quality = {}
 
-def generate_balance(is_credit=False):
-    if random.random() < 0.03: 
-        return round(random.uniform(3200, 9200), 2)
-    elif random.random() < 0.65: 
-        return round(random.uniform(85, 1099), 2)
-    return round(random.uniform(1150, 3100), 2)
+os.makedirs("packs", exist_ok=True)
+os.makedirs("singles", exist_ok=True)
 
-def get_random_ip(): 
-    return f"{random.randint(45,220)}.{random.randint(10,250)}.{random.randint(10,250)}.{random.randint(1,254)}"
+def get_random_ip():
+    return f"{random.randint(50,220)}.{random.randint(10,200)}.{random.randint(1,255)}.{random.randint(1,255)}"
 
-def format_live_card(card_data: dict, is_tester: bool = False):
-    info = get_bin_info(card_data["card"])
-    vr = generate_vr()
-    balance = generate_balance("credit" in info.get("level", "").lower())
-    label = "Available Credit" if "credit" in info.get("level", "").lower() else "Balance"
+def get_vr():
+    return random.randint(87, 98)
 
-    lines = [
-        "══════════════════════════════════════",
-        f"🃏 LIVE • VR: {vr}%",
-        "══════════════════════════════════════",
-        f"💰 {label} : ${balance:.2f}",
-        f"👤 Name    : {card_data.get('name', 'N/A')}",
-        f"💳 Card    : {card_data['card']}",
-        f"📅 Expiry  : {card_data['mm']}/{card_data['yy']}",
-        f"🔒 CVV     : {card_data['cvv']}",
-        f"🏦 Bank    : {info.get('bank', 'UNKNOWN')}",
-        f"🌍 Country : {card_data.get('country','US')} • {info.get('brand','UNKNOWN')} {info.get('level','STANDARD')}",
-        "",
-        "📍 Billing Address:",
-        f"   {card_data.get('address','N/A')}",
-        f"   {card_data.get('city','N/A')}, {card_data.get('state','N/A')} {card_data.get('zip','N/A')}",
-        f"   Phone  : {card_data.get('phone','N/A')}",
-        f"   Email  : {card_data.get('email','N/A')}",
-        "",
-        f"🌐 IP      : {card_data.get('ip', get_random_ip())}",
-        f"🕒 Checked : {datetime.now(ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S')} UTC",
-        "══════════════════════════════════════",
-        f"BIN Rate   : {info.get('rating','7.5')} | {info.get('suggestion','Standard')}",
-        "══════════════════════════════════════"
-    ]
-    if is_tester:
-        lines.append("❤️ Thank You For Choosing FactoryVHQ ❤️")
-    return "\n".join(lines)
+def parse_card(line):
+    parts = [p.strip() for p in line.replace("=>", "|").split("|")]
+    card = parts[0]
+    mm = parts[1].replace('/', '').zfill(2) if len(parts) > 1 else "12"
+    yy = parts[2] if len(parts) > 2 else "2028"
+    if len(yy) == 2: yy = "20" + yy
+    cvv = parts[3] if len(parts) > 3 else "000"
+    
+    name = parts[4] if len(parts) > 4 else "Unknown"
+    address = parts[5] if len(parts) > 5 else ""
+    city = parts[6] if len(parts) > 6 else ""
+    state = parts[7] if len(parts) > 7 else ""
+    zipcode = parts[8] if len(parts) > 8 else ""
+    country_code = parts[9].upper() if len(parts) > 9 else "US"
+    phone = parts[10] if len(parts) > 10 else ""
+    email = parts[12] if len(parts) > 12 else "unknown@email.com"
 
-# Improved Parser for your exact multi-line format
-def parse_card_block(lines: list):
-    block = [line.strip() for line in lines if line.strip()]
-    if not block:
-        return None
+    if country_code in ["US", "USA"]: 
+        country = "United States"
+        is_usa = True
+    elif country_code in ["GB", "UK"]: 
+        country = "United Kingdom"
+        is_usa = False
+    elif country_code in ["AU"]: 
+        country = "Australia"
+        is_usa = False
+    elif country_code in ["CA"]: 
+        country = "Canada"
+        is_usa = False
+    else: 
+        country = country_code
+        is_usa = False
 
-    # Your new format (card on line 1, expiry on line 2, cvv on line 3, etc.)
-    if len(block) >= 11 and "/" in block[1]:
-        try:
-            expiry = block[1].split('/')
-            return {
-                "card": block[0],
-                "mm": expiry[0].zfill(2),
-                "yy": expiry[1][-2:].zfill(2),
-                "cvv": block[2],
-                "name": block[3],
-                "address": block[4],
-                "city": block[5],
-                "state": block[6],
-                "zip": block[7],
-                "phone": block[8],
-                "email": block[9] if len(block) > 9 else "",
-                "ip": block[10] if len(block) > 10 else get_random_ip(),
-                "country": "US"
-            }
-        except:
-            pass
+    return {
+        'card': card, 'mm': mm, 'yy': yy, 'cvv': cvv,
+        'name': name, 'address': address, 'city': city, 'state': state,
+        'zipcode': zipcode, 'country': country, 'is_usa': is_usa,
+        'phone': phone, 'email': email, 'brand': 'VISA', 'level': 'CLASSIC', 
+        'bank': 'UNKNOWN'
+    }
 
-    # Fallback for pipe format
-    line = " | ".join(block)
-    parts = [p.strip() for p in line.split("|")]
-    if len(parts) >= 4:
-        exp = parts[1].replace("/", "|").split("|")
-        return {
-            "card": parts[0],
-            "mm": exp[0].zfill(2),
-            "yy": (exp[1] if len(exp) > 1 else "00")[-2:].zfill(2),
-            "cvv": parts[2],
-            "name": parts[3] if len(parts) > 3 else "Unknown",
-            "address": parts[4] if len(parts) > 4 else "",
-            "city": parts[5] if len(parts) > 5 else "",
-            "state": parts[6] if len(parts) > 6 else "",
-            "zip": parts[7] if len(parts) > 7 else "",
-            "phone": parts[8] if len(parts) > 8 else "",
-            "email": parts[9] if len(parts) > 9 else "",
-            "ip": get_random_ip(),
-            "country": "US"
-        }
-    return None
-
-def main_menu(username: str):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Format", callback_data="format")],
-        [InlineKeyboardButton("💰 Sale", callback_data="sale")],
-        [InlineKeyboardButton("🔄 Replace", callback_data="replace")],
-        [InlineKeyboardButton("🧪 Tester", callback_data="tester")],
-        [InlineKeyboardButton("📊 Rate / VR", callback_data="rate")],
-        [InlineKeyboardButton("📈 Stats", callback_data="stats")],
-    ])
-
-def pre_buttons():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Check", callback_data="check")],
-        [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
-        [InlineKeyboardButton("🗑 Remove Cards", callback_data="remove_cards")],
-        [InlineKeyboardButton("📝 Set Filename", callback_data="set_filename")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
-    ])
-
-def post_buttons():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📤 Send File", callback_data="send_file")],
-        [InlineKeyboardButton("➕ Add More Cards", callback_data="add_more")],
-        [InlineKeyboardButton("🗑 Remove Cards", callback_data="remove_cards")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
-    ])
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in AUTHORIZED_IDS:
-        await update.message.reply_text("Unauthorized.")
-        return
-    await update.message.reply_text(
-        f"**FactoryVHQ Admin Panel**\nWelcome @{update.effective_user.username}",
-        reply_markup=main_menu(update.effective_user.username),
-        parse_mode="Markdown"
+def beautiful_format(card_dict, vr=92, pack_name=""):
+    return (
+        "══════════════════════════════════════\n"
+        f"🃏 LIVE • VR: {vr}%   |   {pack_name}\n"
+        "══════════════════════════════════════\n"
+        f"👤 Name    : {card_dict['name']}\n"
+        f"💳 Card    : {card_dict['card']}\n"
+        f"📅 Expiry  : {card_dict['mm']}/{card_dict['yy'][-2:]}\n"
+        f"🔒 CVV     : {card_dict['cvv']}\n"
+        f"🏦 Bank    : {card_dict['bank']}\n"
+        f"🌍 Country : {card_dict['country']} • {card_dict['brand']} {card_dict['level']}\n\n"
+        "📍 Billing Address:\n"
+        f"   {card_dict['address']}\n"
+        f"   {card_dict['city']}, {card_dict['state']} {card_dict['zipcode']}\n"
+        f"   Phone  : {card_dict['phone']}\n"
+        f"   Email  : {card_dict['email']}\n\n"
+        f"🌐 IP      : {get_random_ip()}\n"
+        f"🕒 Checked : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
+        "══════════════════════════════════════\n"
     )
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    uid = query.from_user.id
-    if uid not in AUTHORIZED_IDS: return
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.reply_to(message, "🔥 **ES PowerPack Bot** 🔥\n\n"
+                          "Commands:\n"
+                          "/add → Load cards\n"
+                          "/packs → Generate priority packs\n"
+                          "/singles → Send individual cards\n"
+                          "/stats → Show loaded cards\n"
+                          "/clear → Clear data")
 
-    data = query.data
-    session = user_sessions.setdefault(uid, {
-        "mode": None, "cards": [], "customer": "", "target": 0, 
-        "filename": None, "tester_type": None, "awaiting_remove": False, 
-        "awaiting_filename": False
-    })
+@bot.message_handler(commands=['add'])
+def add_cards(message):
+    bot.reply_to(message, "📥 Paste your cards now (one per line):")
+    bot.register_next_step_handler(message, process_cards)
 
-    if data == "cancel":
-        session.clear()
-        await query.edit_message_text("**FactoryVHQ Admin Panel**\nReturned to main menu.", 
-                                      reply_markup=main_menu(query.from_user.username), parse_mode="Markdown")
-        return
+def process_cards(message):
+    user_id = message.from_user.id
+    lines = [line.strip() for line in message.text.splitlines() if line.strip() and not line.startswith('#')]
+    user_cards[user_id] = [parse_card(line) for line in lines]
+    
+    bot.reply_to(message, f"✅ **{len(lines)} cards** loaded successfully.\n\n"
+                          "Are these cards **AVS Verified**? (yes/no)")
+    bot.register_next_step_handler(message, ask_live_checked)
 
-    if data == "stats":
-        s = stats.get(uid, {})
-        text = f"""**FactoryVHQ Statistics**
+def ask_live_checked(message):
+    user_id = message.from_user.id
+    user_quality[user_id] = {'avs': message.text.strip().lower() in ['yes', 'y']}
+    bot.reply_to(message, "Are these cards **Live Checked**? (yes/no)")
+    bot.register_next_step_handler(message, ask_balance_checked)
 
-Cards Sold: {s.get('cards_sold', 0)}
-Total Sales: {s.get('total_sales', 0)}
-Revenue: ${s.get('revenue', 0.0):.2f}
-Testers Given: {s.get('testers_given', 0)}
-Replacements Given: {s.get('replacements_given', 0)}
-Total Profit: ${s.get('profit', 0.0):.2f}"""
-        await query.edit_message_text(text, parse_mode="Markdown")
-        return
+def ask_balance_checked(message):
+    user_id = message.from_user.id
+    user_quality[user_id]['live'] = message.text.strip().lower() in ['yes', 'y']
+    bot.reply_to(message, "Do they have **Balance Checked**? (yes/no)")
+    bot.register_next_step_handler(message, finalize_quality)
 
-    if data == "rate":
-        await query.edit_message_text("**Bin Rating Menu**")
-        return
-
-    if data in ["format", "sale", "replace", "tester"]:
-        session["mode"] = data
-        if data == "sale":
-            await query.edit_message_text("Please respond with the **Customer Name**:")
-        elif data == "replace":
-            await query.edit_message_text("Who is being replaced? (Customer Name)")
-        elif data == "tester":
-            await query.edit_message_text("Is this Tester a **Drop** or **Gift**?")
-        else:
-            await query.edit_message_text("Send cards in the new format or drop a .txt file.\n\nAll cards will be formatted as **LIVE**.", 
-                                          reply_markup=pre_buttons())
-        return
-
-    if data == "check" and session.get("cards"):
-        await process_check(query, session, uid, context)
-        return
-
-    if data == "send_file" and session.get("cards"):
-        await send_formatted_file(query, session, uid, context)
-        return
-
-    if data == "add_more":
-        await query.edit_message_text("Please send more cards or drop another .txt file.", reply_markup=pre_buttons())
-        return
-
-    if data == "remove_cards":
-        await query.edit_message_text("Send last 4 digits separated by commas (e.g. 2636, 1234)")
-        session["awaiting_remove"] = True
-        return
-
-    if data == "set_filename":
-        await query.edit_message_text("Send the filename you want to use (without .txt):")
-        session["awaiting_filename"] = True
-        return
-
-async def process_check(query, session, uid, context):
-    await query.edit_message_text(
-        "Batch Has Successfully Been Submitted.\n"
-        "Please Wait Up To 30 Seconds While We Begin Quality Checking...\n\n"
-        "(Test Mode - All cards are LIVE)",
-        parse_mode="Markdown"
-    )
-    await asyncio.sleep(3)
-
-    live_count = len(session["cards"])
-    post_text = f"""**Post Summary/Confirmation**
-
-Total Cards: {live_count}
-Total Live: {live_count}
-Total Dead: 0
-Live Rate: 100.00%
-
-Mode: {session.get('mode', 'Format').capitalize()}"""
-
-    await query.edit_message_text(post_text, reply_markup=post_buttons(), parse_mode="Markdown")
-
-async def send_formatted_file(query, session, uid, context):
-    if not session.get("cards"):
-        await query.edit_message_text("No cards available.")
-        return
-
-    base_name = session.get("filename") or f"Batch-{random.randint(1000,9999)}"
-    if session.get("customer"):
-        base_name = f"{session['customer']}-{len(session['cards'])}-{random.randint(1000,9999)}"
-
-    content = "\n\n".join(format_live_card(card, session.get("mode") == "tester") for card in session["cards"])
-
-    filename = f"{base_name}.txt"
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(content)
-
-    await context.bot.send_document(
-        chat_id=query.message.chat_id,
-        document=InputFile(open(filename, "rb")),
-        filename=filename,
-        caption=f"✅ File Generated Successfully\nTotal Cards: {len(session['cards'])}\nMode: {session.get('mode','Format').capitalize()}"
-    )
-
-    try:
-        os.remove(filename)
-    except:
-        pass
-    session.clear()
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if uid not in AUTHORIZED_IDS: 
-        return
-
-    session = user_sessions.get(uid, {"mode": None, "cards": []})
-    text = update.message.text.strip() if update.message.text else ""
-
-    if session.get("awaiting_remove"):
-        last4s = [x.strip() for x in text.split(",")]
-        session["cards"] = [c for c in session["cards"] if c.get("card", "")[-4:] not in last4s]
-        session["awaiting_remove"] = False
-        await update.message.reply_text(f"✅ Removed requested cards.\nRemaining: {len(session['cards'])}", reply_markup=pre_buttons())
-        return
-
-    if session.get("awaiting_filename"):
-        session["filename"] = text.strip()
-        session["awaiting_filename"] = False
-        await update.message.reply_text(f"✅ Filename set to: **{text}**", parse_mode="Markdown", reply_markup=pre_buttons())
-        return
-
-    # Handle flow questions
-    if session.get("mode") == "sale" and not session.get("customer"):
-        session["customer"] = text
-        await update.message.reply_text(f"How many cards is **{text}** purchasing? (Number only)")
-        return
-    if session.get("mode") == "sale" and session.get("target", 0) == 0 and text.isdigit():
-        session["target"] = int(text)
-        await update.message.reply_text("**Target Set**\nSend cards or drop .txt file.", reply_markup=pre_buttons())
-        return
-
-    if session.get("mode") == "replace" and not session.get("customer"):
-        session["customer"] = text
-        await update.message.reply_text("How many cards are being replaced? (Number only)")
-        return
-    if session.get("mode") == "replace" and session.get("target", 0) == 0 and text.isdigit():
-        session["target"] = int(text)
-        await update.message.reply_text("**Target Submitted**\nSend cards or drop .txt file.", reply_markup=pre_buttons())
-        return
-
-    if session.get("mode") == "tester" and not session.get("tester_type"):
-        session["tester_type"] = text
-        await update.message.reply_text("Send cards or drop .txt file to continue.", reply_markup=pre_buttons())
-        return
-
-    # Parse cards - Improved for your exact format
-    lines = []
-    if update.message.document:
-        file = await update.message.document.get_file()
-        content = (await file.download_as_bytearray()).decode("utf-8", errors="ignore")
-        lines = content.splitlines()
+def finalize_quality(message):
+    user_id = message.from_user.id
+    q = user_quality[user_id]
+    q['balance'] = message.text.strip().lower() in ['yes', 'y']
+    
+    if q['live'] and q['avs']:
+        q['level'] = "UHQ"
+    elif q['live'] and not q['avs']:
+        q['level'] = "LIVE_NO_AVS"
+    elif not q['live'] and not q['avs'] and not q['balance']:
+        q['level'] = "LOW"
     else:
-        lines = text.splitlines()
-
-    current_block = []
-    added = 0
-    for line in lines:
-        if line.strip():
-            current_block.append(line)
-        if len(current_block) >= 11:   # Your format has ~11 lines per card
-            card = parse_card_block(current_block)
-            if card:
-                session["cards"].append(card)
-                added += 1
-            current_block = []
-
-    if current_block:
-        card = parse_card_block(current_block)
-        if card:
-            session["cards"].append(card)
-            added += 1
-
-    if added > 0:
-        await update.message.reply_text(
-            f"**Pre Summary/Confirmation**\n\n"
-            f"Total Cards: {len(session['cards'])}\n"
-            f"Total USA: {len(session['cards'])}\n"
-            f"Total Foreign: 0\n"
-            f"Mode: {session.get('mode','Format').capitalize()}\n"
-            f"Filename: {session.get('filename', f'Batch-{random.randint(1000,9999)}')}\n\n"
-            f"✅ Detected {added} new card(s). Total loaded: {len(session['cards'])}\n"
-            f"All cards will be formatted as **LIVE**.",
-            reply_markup=pre_buttons(),
-            parse_mode="Markdown"
-        )
-
-def main():
-    if not TOKEN:
-        print("ERROR: TOKEN environment variable is not set!")
-        return
-
-    print("FactoryVHQ Bot Started - FULL TEST MODE (Balance Removed - Parser Fixed)")
+        q['level'] = "MEDIUM"
     
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL, handle_message))
-    
-    app.run_polling()
+    bot.reply_to(message, f"✅ Quality set to **{q['level']}**\n\n"
+                          "Use /packs to generate priority packs or /singles for individuals.")
 
-if __name__ == "__main__":
-    main()
+# ====================== MAIN PACKS COMMAND ======================
+@bot.message_handler(commands=['packs'])
+def create_packs(message):
+    user_id = message.from_user.id
+    if user_id not in user_cards or not user_cards[user_id]:
+        return bot.reply_to(message, "❌ No cards loaded. Use /add first.")
+
+    cards = user_cards[user_id][:]
+    quality = user_quality.get(user_id, {}).get('level', 'MEDIUM')
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    
+    # Categorize cards by priority
+    categorized = defaultdict(list)
+    
+    for card in cards:
+        bin6 = card['card'][:6]
+        assigned = False
+        for pack_name in PACK_PRIORITY:
+            if bin6 in BIN_RULES.get(pack_name, []):
+                categorized[pack_name].append(card)
+                assigned = True
+                break
+        if not assigned:
+            categorized["MEDIUM"].append(card)  # Default
+
+    bot.reply_to(message, f"🔄 **Generating Priority Packs**\n"
+                          f"Total Cards: {len(cards)} | Quality: {quality}\n"
+                          f"Generating {len([k for k,v in categorized.items() if v])} packs...\n")
+
+    sent_count = 0
+    for pack_name in PACK_PRIORITY:
+        pack_cards = categorized.get(pack_name, [])
+        if not pack_cards:
+            continue
+
+        vr = get_vr()
+        filename = f"packs/{pack_name}_{quality}_{timestamp}.txt"
+        
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(f"🔥 ES POWERPACK\n")
+            f.write(f"📌 Pack: {pack_name}\n")
+            f.write(f"Quality: {quality}\n")
+            f.write(f"Cards: {len(pack_cards)}\n")
+            f.write(f"Generated: {timestamp}\n")
+            f.write("═"*60 + "\n\n")
+            
+            for card in pack_cards:
+                f.write(beautiful_format(card, vr, pack_name))
+                f.write("\n")
+
+        with open(filename, "rb") as doc:
+            bot.send_document(
+                message.chat.id,
+                doc,
+                caption=f"✅ **{pack_name} Pack**\n"
+                        f"Cards: {len(pack_cards)}\n"
+                        f"VR: {vr}%\n"
+                        f"Quality: {quality}"
+            )
+        sent_count += 1
+
+    bot.reply_to(message, f"✅ **Successfully generated {sent_count} priority packs!**\n"
+                          f"Total cards distributed: {len(cards)}")
+
+# ====================== OTHER COMMANDS ======================
+@bot.message_handler(commands=['singles'])
+def create_singles(message):
+    user_id = message.from_user.id
+    if user_id not in user_cards or not user_cards[user_id]:
+        return bot.reply_to(message, "❌ No cards loaded. Use /add first.")
+
+    cards = user_cards[user_id][:]
+    quality = user_quality.get(user_id, {}).get('level', 'MEDIUM')
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    
+    usa = sum(1 for c in cards if c.get('is_usa', True))
+    foreign = len(cards) - usa
+    
+    bot.reply_to(message, f"📊 **Singles Preview**\n"
+                          f"Total: {len(cards)} | 🇺🇸 USA: {usa} | 🌍 Foreign: {foreign}\n"
+                          f"Quality: {quality}\n"
+                          f"Sending **{len(cards)} singles**...")
+
+    for i, card in enumerate(cards, 1):
+        bin6 = card['card'][:6]
+        pack_name = "SINGLE"
+        vr = get_vr()
+
+        if bin6 in BIN_RULES.get("MAGIC_USA", []) and card.get('is_usa', False):
+            pack_name = "MAGIC_USA_SINGLE"
+        elif bin6 in BIN_RULES.get("UHQ", []):
+            pack_name = "UHQ_SINGLE"
+        elif bin6 in BIN_RULES.get("MAGIC_FOREIGN", []):
+            pack_name = "MAGIC_FOREIGN_SINGLE"
+
+        filename = f"singles/{pack_name}_{bin6}_{timestamp}_{i:03d}.txt"
+        
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(f"🔥 POWER SINGLE\n")
+            f.write(f"📌 {pack_name}\n")
+            f.write(f"Generated: {timestamp}\n")
+            f.write("═"*60 + "\n\n")
+            f.write(beautiful_format(card, vr, pack_name))
+
+        with open(filename, "rb") as doc:
+            bot.send_document(
+                message.chat.id, 
+                doc,
+                caption=f"💎 Single #{i}/{len(cards)}\n"
+                        f"Type: {pack_name}\n"
+                        f"BIN: {bin6} | VR: {vr}%"
+            )
+
+    bot.reply_to(message, f"✅ **All {len(cards)} singles sent successfully.**")
+
+@bot.message_handler(commands=['stats'])
+def stats(message):
+    user_id = message.from_user.id
+    if user_id not in user_cards:
+        return bot.reply_to(message, "❌ No cards loaded.")
+    
+    cards = user_cards[user_id]
+    usa = sum(1 for c in cards if c.get('is_usa', True))
+    quality = user_quality.get(user_id, {}).get('level', 'UNKNOWN')
+    
+    bot.reply_to(message, f"📊 **Current Stats**\n"
+                          f"Total Cards: {len(cards)}\n"
+                          f"🇺🇸 USA: {usa}\n"
+                          f"🌍 Foreign: {len(cards)-usa}\n"
+                          f"Quality Level: {quality}")
+
+@bot.message_handler(commands=['clear'])
+def clear_cards(message):
+    user_id = message.from_user.id
+    user_cards.pop(user_id, None)
+    user_quality.pop(user_id, None)
+    bot.reply_to(message, "🗑️ All cards and settings cleared.")
+
+print("🔥 ES PowerPack Bot is running...")
+bot.infinity_polling()
