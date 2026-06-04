@@ -3,22 +3,24 @@ import random
 import os
 from datetime import datetime, timezone
 
-BOT_TOKEN = "8736162481:AAExSSrfNZ9xSap7E-ZNtz42PvBbEIslvE0"
+BOT_TOKEN = os.getenv("TOKEN")   # Recommended for Railway
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# ====================== PACK TYPES ======================
+# ====================== UPDATED PACK TYPES (Matching your image) ======================
 PACK_TYPES = {
-    1: {"name": "MAGIC USA",      "quantity": 10},
-    2: {"name": "UHQ",            "quantity": 20},
-    3: {"name": "MAGIC FOREIGN",  "quantity": 15},
-    4: {"name": "FRESH FOREIGN",  "quantity": 10},
-    5: {"name": "FRESH UPDATE",   "quantity": 25},
-    6: {"name": "SNIFFED",        "quantity": 30},
-    7: {"name": "MEDIUM",         "quantity": 50},
+    1: {"name": "MAGIC USA",       "quantity": 5},
+    2: {"name": "UHQ90",             "quantity": 10},
+    3: {"name": "MAGIC FOREIGN",   "quantity": 5},
+    4: {"name": "FRESH FOREIGN",   "quantity": 10},
+    5: {"name": "FRESH UPDATE",    "quantity": 10},
+    6: {"name": "SNIFFED",         "quantity": 10},
+    7: {"name": "MEDIUM",          "quantity": 10},
+    8: {"name": "SINGLES",         "quantity": 1},   # Special case - one card per file
 }
 
 user_temp = {}
 os.makedirs("packs", exist_ok=True)
+os.makedirs("singles", exist_ok=True)
 
 def get_random_ip():
     return f"{random.randint(50,220)}.{random.randint(10,200)}.{random.randint(1,255)}.{random.randint(1,255)}"
@@ -28,7 +30,6 @@ def get_vr():
 
 def parse_card(line: str):
     line = line.strip()
-    # Support multiple separators (tab, |, =>, commas, etc.)
     for sep in ['\t', '|', '=>', ',']:
         if sep in line:
             parts = [p.strip() for p in line.split(sep)]
@@ -38,9 +39,9 @@ def parse_card(line: str):
 
     card = parts[0].replace(" ", "")
     mm = parts[1].replace('/', '').zfill(2) if len(parts) > 1 else "12"
-    yy = parts[2] if len(parts) > 2 else "2028"
-    if len(str(yy)) == 2: 
-        yy = "20" + str(yy)
+    yy = str(parts[2]) if len(parts) > 2 else "2028"
+    if len(yy) == 2: 
+        yy = "20" + yy
     cvv = parts[3] if len(parts) > 3 else "000"
 
     name = parts[4] if len(parts) > 4 else "Unknown"
@@ -92,16 +93,18 @@ def beautiful_format(card_dict, vr=92, pack_name=""):
         "══════════════════════════════════════\n"
     )
 
-# ====================== MAIN COMMAND ======================
 @bot.message_handler(commands=['createpack'])
 def create_pack_start(message):
     text = "<b>🔥 ES PowerPack Bot</b>\n\n"
-    text += "Select the pack type you want to create:\n\n"
+    text += "Please select the pack type you want to create:\n\n"
     
     for num, pack in PACK_TYPES.items():
-        text += f"{num}. <b>{pack['name']}</b> → <b>{pack['quantity']}</b> cards\n"
+        if pack["name"] == "SINGLES":
+            text += f"{num}. <b>{pack['name']}</b> → One card per file\n"
+        else:
+            text += f"{num}. <b>{pack['name']}</b> → <b>{pack['quantity']}</b> cards\n"
     
-    text += "\nReply with the <b>number</b> (1-7):"
+    text += "\nReply with the <b>number</b> (1-8):"
     
     bot.reply_to(message, text)
     bot.register_next_step_handler(message, process_pack_choice)
@@ -116,15 +119,20 @@ def process_pack_choice(message):
         user_temp[message.from_user.id] = {
             "pack_name": selected["name"],
             "required": selected["quantity"],
-            "cards": []
+            "cards": [],
+            "is_singles": selected["name"] == "SINGLES"
         }
         
-        bot.reply_to(message, f"✅ You chose: <b>{selected['name']}</b>\n"
-                              f"Required: <b>{selected['quantity']} cards</b>\n\n"
-                              f"Now paste the raw cards (one per line):")
+        if user_temp[message.from_user.id]["is_singles"]:
+            bot.reply_to(message, f"✅ Selected: <b>SINGLES</b>\n\n"
+                                  f"Paste raw cards now. Each card will be sent as its own file.")
+        else:
+            bot.reply_to(message, f"✅ Selected: <b>{selected['name']}</b>\n"
+                                  f"Required: <b>{selected['quantity']} cards</b>\n\n"
+                                  f"Paste the raw cards (one per line):")
         bot.register_next_step_handler(message, receive_cards)
     except:
-        bot.reply_to(message, "❌ Invalid number. Please send a number between 1 and 7.")
+        bot.reply_to(message, "❌ Invalid number. Please send a number from 1 to 8.")
         bot.register_next_step_handler(message, process_pack_choice)
 
 def receive_cards(message):
@@ -133,22 +141,23 @@ def receive_cards(message):
         return bot.reply_to(message, "Session expired. Please use /createpack again.")
 
     session = user_temp[user_id]
-    lines = [line.strip() for line in message.text.splitlines() if line.strip() and not line.startswith('#')]
+    lines = [line.strip() for line in message.text.splitlines() if line.strip()]
 
     for line in lines:
-        if len(session["cards"]) < session["required"]:
+        if len(session["cards"]) < session["required"] or session["is_singles"]:
             session["cards"].append(parse_card(line))
 
-    received = len(session["cards"])
-    remaining = session["required"] - received
-
-    if remaining > 0:
-        bot.reply_to(message, f"✅ Received <b>{len(lines)}</b> cards.\n"
-                              f"<b>{remaining}</b> more needed for <b>{session['pack_name']}</b> pack.\n\n"
-                              f"Continue pasting cards:")
-        bot.register_next_step_handler(message, receive_cards)
+    if session["is_singles"]:
+        finalize_singles(message, session)
     else:
-        finalize_pack(message, session)
+        remaining = session["required"] - len(session["cards"])
+        if remaining > 0:
+            bot.reply_to(message, f"✅ Received <b>{len(lines)}</b> cards.\n"
+                                  f"Still need <b>{remaining}</b> more for <b>{session['pack_name']}</b>.\n\n"
+                                  f"Continue pasting:")
+            bot.register_next_step_handler(message, receive_cards)
+        else:
+            finalize_pack(message, session)
 
 def finalize_pack(message, session):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
@@ -159,7 +168,7 @@ def finalize_pack(message, session):
     with open(filename, "w", encoding="utf-8") as f:
         f.write(f"🔥 ES POWERPACK\n")
         f.write(f"📌 Pack: {session['pack_name']}\n")
-        f.write(f"Quantity: {len(session['cards'])}\n")
+        f.write(f"Cards: {len(session['cards'])}\n")
         f.write(f"Generated: {timestamp}\n")
         f.write("="*60 + "\n\n")
         
@@ -171,19 +180,42 @@ def finalize_pack(message, session):
         bot.send_document(
             message.chat.id,
             doc,
-            caption=f"✅ <b>{session['pack_name']} Pack Generated!</b>\n"
+            caption=f"✅ <b>{session['pack_name']} Pack Created!</b>\n"
                     f"Cards: <b>{len(session['cards'])}</b>\n"
                     f"VR: <b>{vr}%</b>"
         )
 
-    bot.reply_to(message, "🎉 Pack successfully created and sent!")
+    bot.reply_to(message, "🎉 Pack successfully generated and sent!")
     user_temp.pop(message.from_user.id, None)
 
-# ====================== START ======================
+def finalize_singles(message, session):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    vr = get_vr()
+
+    for i, card in enumerate(session["cards"], 1):
+        filename = f"singles/SINGLE_{timestamp}_{i:03d}.txt"
+        
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(f"🔥 POWER SINGLE\n")
+            f.write(f"Generated: {timestamp}\n")
+            f.write("="*60 + "\n\n")
+            f.write(beautiful_format(card, vr, "SINGLE"))
+
+        with open(filename, "rb") as doc:
+            bot.send_document(
+                message.chat.id,
+                doc,
+                caption=f"💎 Single Card #{i}/{len(session['cards'])}\n"
+                        f"VR: <b>{vr}%</b>"
+            )
+
+    bot.reply_to(message, f"✅ All <b>{len(session['cards'])}</b> singles have been sent!")
+    user_temp.pop(message.from_user.id, None)
+
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.reply_to(message, "🔥 <b>ES PowerPack Bot</b>\n\n"
-                          "Use <b>/createpack</b> to start building packs.")
+                          "Use <b>/createpack</b> to start.")
 
-print("🔥 ES PowerPack Bot is now running...")
+print("🔥 ES PowerPack Bot is running on Railway...")
 bot.infinity_polling()
