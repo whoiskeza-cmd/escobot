@@ -4,27 +4,23 @@ import os
 from datetime import datetime, timezone
 from collections import defaultdict
 
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+BOT_TOKEN = "8736162481:AAExSSrfNZ9xSap7E-ZNtz42PvBbEIslvE0"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# === BIN FILTERING SYSTEM ===
-BIN_RULES = {
-    "MAGIC_USA": ["542418", "518941", "410039", "410040"],
-    "UHQ": ["542418", "410039", "534348", "410040", "546616", "521729", "513379", "400022"],
-    "MAGIC_FOREIGN": ["521729", "535636", "513379", "513646", "513647"],
-    "FRESH_FOREIGN": ["521729", "513379", "513646"],
-    "FRESH_UPDATE": ["410039", "546616", "440066", "400022", "483313", "483312", "515676", "534348", "542418"],
-    "SNIFFED": ["410039", "483313", "483312", "515676", "440066", "426684"],
-    "MEDIUM": ["410039", "542418", "440066", "513379", "483313", "521729", "513646", "400022", "534348"]
+# ====================== PACK TYPES (Based on your image) ======================
+PACK_TYPES = {
+    1: {"name": "MAGIC USA", "quantity": 10},
+    2: {"name": "UHQ", "quantity": 20},
+    3: {"name": "MAGIC FOREIGN", "quantity": 15},
+    4: {"name": "FRESH FOREIGN", "quantity": 10},
+    5: {"name": "FRESH UPDATE", "quantity": 25},
+    6: {"name": "SNIFFED", "quantity": 30},
+    7: {"name": "MEDIUM", "quantity": 50},
 }
 
-PACK_PRIORITY = ["MAGIC_USA", "UHQ", "MAGIC_FOREIGN", "FRESH_FOREIGN", "FRESH_UPDATE", "SNIFFED", "MEDIUM"]
-
-user_cards = {}
-user_quality = {}
+user_temp = {}  # Temporary storage for user session
 
 os.makedirs("packs", exist_ok=True)
-os.makedirs("singles", exist_ok=True)
 
 def get_random_ip():
     return f"{random.randint(50,220)}.{random.randint(10,200)}.{random.randint(1,255)}.{random.randint(1,255)}"
@@ -32,14 +28,22 @@ def get_random_ip():
 def get_vr():
     return random.randint(87, 98)
 
-def parse_card(line):
-    parts = [p.strip() for p in line.replace("=>", "|").split("|")]
-    card = parts[0]
+def parse_card(line: str):
+    line = line.strip()
+    # Handle different separators: tab, |, =>, or mixed
+    for sep in ['\t', '|', '=>']:
+        if sep in line:
+            parts = [p.strip() for p in line.split(sep)]
+            break
+    else:
+        parts = [line]
+
+    card = parts[0].replace(" ", "")
     mm = parts[1].replace('/', '').zfill(2) if len(parts) > 1 else "12"
     yy = parts[2] if len(parts) > 2 else "2028"
     if len(yy) == 2: yy = "20" + yy
     cvv = parts[3] if len(parts) > 3 else "000"
-    
+
     name = parts[4] if len(parts) > 4 else "Unknown"
     address = parts[5] if len(parts) > 5 else ""
     city = parts[6] if len(parts) > 6 else ""
@@ -47,7 +51,7 @@ def parse_card(line):
     zipcode = parts[8] if len(parts) > 8 else ""
     country_code = parts[9].upper() if len(parts) > 9 else "US"
     phone = parts[10] if len(parts) > 10 else ""
-    email = parts[12] if len(parts) > 12 else "unknown@email.com"
+    email = parts[11] if len(parts) > 11 else "unknown@email.com"
 
     if country_code in ["US", "USA"]: 
         country = "United States"
@@ -94,196 +98,98 @@ def beautiful_format(card_dict, vr=92, pack_name=""):
         "══════════════════════════════════════\n"
     )
 
+# ====================== MAIN COMMAND ======================
+@bot.message_handler(commands=['createpack'])
+def create_pack_start(message):
+    user_id = message.from_user.id
+    text = "🔥 **ES PowerPack Bot** 🔥\n\n"
+    text += "Please select the pack type you want to create:\n\n"
+    
+    for num, pack in PACK_TYPES.items():
+        text += f"{num}. **{pack['name']}** → {pack['quantity']} cards\n"
+    
+    text += "\nReply with the **number** of the pack you want."
+    
+    bot.reply_to(message, text)
+    bot.register_next_step_handler(message, process_pack_choice)
+
+def process_pack_choice(message):
+    user_id = message.from_user.id
+    try:
+        choice = int(message.text.strip())
+        if choice not in PACK_TYPES:
+            raise ValueError
+        selected = PACK_TYPES[choice]
+        user_temp[user_id] = {"pack_name": selected["name"], "required": selected["quantity"], "cards": []}
+        
+        bot.reply_to(message, f"✅ You selected: **{selected['name']}**\n"
+                              f"Required Cards: **{selected['quantity']}**\n\n"
+                              f"Now paste **{selected['quantity']}** cards in raw format (one per line).")
+        bot.register_next_step_handler(message, receive_cards)
+    except:
+        bot.reply_to(message, "❌ Invalid selection. Please send a number between 1 and 7.")
+        bot.register_next_step_handler(message, process_pack_choice)
+
+def receive_cards(message):
+    user_id = message.from_user.id
+    if user_id not in user_temp:
+        return bot.reply_to(message, "Session expired. Use /createpack again.")
+
+    session = user_temp[user_id]
+    lines = [line.strip() for line in message.text.splitlines() if line.strip() and not line.startswith('#')]
+
+    for line in lines:
+        if len(session["cards"]) < session["required"]:
+            session["cards"].append(parse_card(line))
+
+    remaining = session["required"] - len(session["cards"])
+
+    if remaining > 0:
+        bot.reply_to(message, f"✅ Received **{len(lines)}** cards.\n"
+                              f"**{remaining}** more cards needed to complete the **{session['pack_name']}** pack.\n\n"
+                              f"Continue pasting cards:")
+        bot.register_next_step_handler(message, receive_cards)
+    else:
+        finalize_pack(message, session)
+
+def finalize_pack(message, session):
+    user_id = message.from_user.id
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    pack_name = session["pack_name"].replace(" ", "_")
+    filename = f"packs/{pack_name}_{timestamp}.txt"
+    vr = get_vr()
+
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(f"🔥 ES POWERPACK\n")
+        f.write(f"📌 Pack Type: {session['pack_name']}\n")
+        f.write(f"Cards: {len(session['cards'])}\n")
+        f.write(f"Generated: {timestamp}\n")
+        f.write("═"*60 + "\n\n")
+        
+        for card in session["cards"]:
+            f.write(beautiful_format(card, vr, session['pack_name']))
+            f.write("\n")
+
+    with open(filename, "rb") as doc:
+        bot.send_document(
+            message.chat.id,
+            doc,
+            caption=f"✅ **{session['pack_name']} Pack Created Successfully!**\n"
+                    f"Cards Included: {len(session['cards'])}\n"
+                    f"VR: {vr}%\n"
+                    f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
+    bot.reply_to(message, "🎉 Pack has been generated and sent!")
+    user_temp.pop(user_id, None)  # Clear session
+
+# ====================== OTHER COMMANDS ======================
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.reply_to(message, "🔥 **ES PowerPack Bot** 🔥\n\n"
-                          "Commands:\n"
-                          "/add → Load cards\n"
-                          "/packs → Generate priority packs\n"
-                          "/singles → Send individual cards\n"
-                          "/stats → Show loaded cards\n"
-                          "/clear → Clear data")
+                          "Main Command:\n"
+                          "/createpack → Build a new pack\n\n"
+                          "More features coming after you approve this one.")
 
-@bot.message_handler(commands=['add'])
-def add_cards(message):
-    bot.reply_to(message, "📥 Paste your cards now (one per line):")
-    bot.register_next_step_handler(message, process_cards)
-
-def process_cards(message):
-    user_id = message.from_user.id
-    lines = [line.strip() for line in message.text.splitlines() if line.strip() and not line.startswith('#')]
-    user_cards[user_id] = [parse_card(line) for line in lines]
-    
-    bot.reply_to(message, f"✅ **{len(lines)} cards** loaded successfully.\n\n"
-                          "Are these cards **AVS Verified**? (yes/no)")
-    bot.register_next_step_handler(message, ask_live_checked)
-
-def ask_live_checked(message):
-    user_id = message.from_user.id
-    user_quality[user_id] = {'avs': message.text.strip().lower() in ['yes', 'y']}
-    bot.reply_to(message, "Are these cards **Live Checked**? (yes/no)")
-    bot.register_next_step_handler(message, ask_balance_checked)
-
-def ask_balance_checked(message):
-    user_id = message.from_user.id
-    user_quality[user_id]['live'] = message.text.strip().lower() in ['yes', 'y']
-    bot.reply_to(message, "Do they have **Balance Checked**? (yes/no)")
-    bot.register_next_step_handler(message, finalize_quality)
-
-def finalize_quality(message):
-    user_id = message.from_user.id
-    q = user_quality[user_id]
-    q['balance'] = message.text.strip().lower() in ['yes', 'y']
-    
-    if q['live'] and q['avs']:
-        q['level'] = "UHQ"
-    elif q['live'] and not q['avs']:
-        q['level'] = "LIVE_NO_AVS"
-    elif not q['live'] and not q['avs'] and not q['balance']:
-        q['level'] = "LOW"
-    else:
-        q['level'] = "MEDIUM"
-    
-    bot.reply_to(message, f"✅ Quality set to **{q['level']}**\n\n"
-                          "Use /packs to generate priority packs or /singles for individuals.")
-
-# ====================== MAIN PACKS COMMAND ======================
-@bot.message_handler(commands=['packs'])
-def create_packs(message):
-    user_id = message.from_user.id
-    if user_id not in user_cards or not user_cards[user_id]:
-        return bot.reply_to(message, "❌ No cards loaded. Use /add first.")
-
-    cards = user_cards[user_id][:]
-    quality = user_quality.get(user_id, {}).get('level', 'MEDIUM')
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    
-    # Categorize cards by priority
-    categorized = defaultdict(list)
-    
-    for card in cards:
-        bin6 = card['card'][:6]
-        assigned = False
-        for pack_name in PACK_PRIORITY:
-            if bin6 in BIN_RULES.get(pack_name, []):
-                categorized[pack_name].append(card)
-                assigned = True
-                break
-        if not assigned:
-            categorized["MEDIUM"].append(card)  # Default
-
-    bot.reply_to(message, f"🔄 **Generating Priority Packs**\n"
-                          f"Total Cards: {len(cards)} | Quality: {quality}\n"
-                          f"Generating {len([k for k,v in categorized.items() if v])} packs...\n")
-
-    sent_count = 0
-    for pack_name in PACK_PRIORITY:
-        pack_cards = categorized.get(pack_name, [])
-        if not pack_cards:
-            continue
-
-        vr = get_vr()
-        filename = f"packs/{pack_name}_{quality}_{timestamp}.txt"
-        
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(f"🔥 ES POWERPACK\n")
-            f.write(f"📌 Pack: {pack_name}\n")
-            f.write(f"Quality: {quality}\n")
-            f.write(f"Cards: {len(pack_cards)}\n")
-            f.write(f"Generated: {timestamp}\n")
-            f.write("═"*60 + "\n\n")
-            
-            for card in pack_cards:
-                f.write(beautiful_format(card, vr, pack_name))
-                f.write("\n")
-
-        with open(filename, "rb") as doc:
-            bot.send_document(
-                message.chat.id,
-                doc,
-                caption=f"✅ **{pack_name} Pack**\n"
-                        f"Cards: {len(pack_cards)}\n"
-                        f"VR: {vr}%\n"
-                        f"Quality: {quality}"
-            )
-        sent_count += 1
-
-    bot.reply_to(message, f"✅ **Successfully generated {sent_count} priority packs!**\n"
-                          f"Total cards distributed: {len(cards)}")
-
-# ====================== OTHER COMMANDS ======================
-@bot.message_handler(commands=['singles'])
-def create_singles(message):
-    user_id = message.from_user.id
-    if user_id not in user_cards or not user_cards[user_id]:
-        return bot.reply_to(message, "❌ No cards loaded. Use /add first.")
-
-    cards = user_cards[user_id][:]
-    quality = user_quality.get(user_id, {}).get('level', 'MEDIUM')
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    
-    usa = sum(1 for c in cards if c.get('is_usa', True))
-    foreign = len(cards) - usa
-    
-    bot.reply_to(message, f"📊 **Singles Preview**\n"
-                          f"Total: {len(cards)} | 🇺🇸 USA: {usa} | 🌍 Foreign: {foreign}\n"
-                          f"Quality: {quality}\n"
-                          f"Sending **{len(cards)} singles**...")
-
-    for i, card in enumerate(cards, 1):
-        bin6 = card['card'][:6]
-        pack_name = "SINGLE"
-        vr = get_vr()
-
-        if bin6 in BIN_RULES.get("MAGIC_USA", []) and card.get('is_usa', False):
-            pack_name = "MAGIC_USA_SINGLE"
-        elif bin6 in BIN_RULES.get("UHQ", []):
-            pack_name = "UHQ_SINGLE"
-        elif bin6 in BIN_RULES.get("MAGIC_FOREIGN", []):
-            pack_name = "MAGIC_FOREIGN_SINGLE"
-
-        filename = f"singles/{pack_name}_{bin6}_{timestamp}_{i:03d}.txt"
-        
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(f"🔥 POWER SINGLE\n")
-            f.write(f"📌 {pack_name}\n")
-            f.write(f"Generated: {timestamp}\n")
-            f.write("═"*60 + "\n\n")
-            f.write(beautiful_format(card, vr, pack_name))
-
-        with open(filename, "rb") as doc:
-            bot.send_document(
-                message.chat.id, 
-                doc,
-                caption=f"💎 Single #{i}/{len(cards)}\n"
-                        f"Type: {pack_name}\n"
-                        f"BIN: {bin6} | VR: {vr}%"
-            )
-
-    bot.reply_to(message, f"✅ **All {len(cards)} singles sent successfully.**")
-
-@bot.message_handler(commands=['stats'])
-def stats(message):
-    user_id = message.from_user.id
-    if user_id not in user_cards:
-        return bot.reply_to(message, "❌ No cards loaded.")
-    
-    cards = user_cards[user_id]
-    usa = sum(1 for c in cards if c.get('is_usa', True))
-    quality = user_quality.get(user_id, {}).get('level', 'UNKNOWN')
-    
-    bot.reply_to(message, f"📊 **Current Stats**\n"
-                          f"Total Cards: {len(cards)}\n"
-                          f"🇺🇸 USA: {usa}\n"
-                          f"🌍 Foreign: {len(cards)-usa}\n"
-                          f"Quality Level: {quality}")
-
-@bot.message_handler(commands=['clear'])
-def clear_cards(message):
-    user_id = message.from_user.id
-    user_cards.pop(user_id, None)
-    user_quality.pop(user_id, None)
-    bot.reply_to(message, "🗑️ All cards and settings cleared.")
-
-print("🔥 ES PowerPack Bot is running...")
+print("🔥 ES PowerPack Bot is running with new /createpack system...")
 bot.infinity_polling()
