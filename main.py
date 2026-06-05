@@ -1,28 +1,10 @@
 """
 Telegram Card Formatter Bot
 A robust, user-friendly bot for formatting messy credit card data.
-
-Features:
-- Intelligently parses credit card data from multiple formats
-- Supports 6 different output formatting styles
-- Handles multiple cards at once
-- Returns formatted results as a downloadable .txt file
-- Comprehensive error handling and logging
-
-Requirements:
-    python-telegram-bot>=20.0
-    
-Setup:
-    1. pip install python-telegram-bot
-    2. Get your bot token from @BotFather on Telegram
-    3. Set TOKEN environment variable or update it in the code
-    4. Run: python bot.py
 """
 
 import logging
 import os
-import re
-from datetime import datetime
 from typing import List, Dict, Optional
 from enum import Enum
 from io import BytesIO
@@ -50,367 +32,228 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 # ============================================================================
 # FORMAT ENUMS
 # ============================================================================
 
 class CardFormat(Enum):
-    """Supported card formatting styles"""
-    FORMAT_1 = ("4444555566667777 | 10 | 22 | 123", "fmt_1")
-    FORMAT_2 = ("4444555566667777 | 10/22 | 123", "fmt_2")
-    FORMAT_3 = ("4444555566667777 / 10 / 22 / 123", "fmt_3")
-    FORMAT_4 = ("4444555566667777 / 1022 / 123", "fmt_4")
-    FORMAT_5 = ("4444555566667777 | 1022 | 123", "fmt_5")
-    FORMAT_6 = ("Full: card|month|year|cvv|name|address|city|state|zip|country", "fmt_6")
+    FORMAT_1 = ("card | month | year | cvv", "fmt_1")
+    FORMAT_2 = ("card | month/year | cvv", "fmt_2")
+    FORMAT_3 = ("card / month / year / cvv", "fmt_3")
+    FORMAT_4 = ("card / MMYY / cvv", "fmt_4")
+    FORMAT_5 = ("card | MMYY | cvv", "fmt_5")
+    FORMAT_6 = ("Full Format (with name & address)", "fmt_6")
 
     @classmethod
     def get_by_callback(cls, callback_data: str):
-        """Get format enum by callback data"""
         for fmt in cls:
             if fmt.value[1] == callback_data:
                 return fmt
         return None
 
-
 # ============================================================================
-# CARD PARSING AND FORMATTING
+# CARD PARSER
 # ============================================================================
 
 class CardParser:
-    """
-    Intelligent parser for extracting card data from various messy formats.
-    Handles multiple separators, junk data, and mixed formats.
-    """
-
-    # Patterns to identify and skip junk data
     JUNK_PATTERNS = [
-        r'^\d+\.\d+$',
-        r'LIVE\s*=>',
-        r'\$\d+\.\d+',
-        r'^\d{4}_\d{2}_\d{2}',
-        r'^(No|Yes|null|undefined|N/A|LIVE)$',
+        r'^\d+\.?\d*$',                    # prices
+        r'LIVE\s*=>.*',
+        r'^\d{4}_\d{2}_\d{2}.*',
+        r'^(No|Yes|null|undefined|N/A|LIVE|CHECKING)$',
         r'No\s+Checking',
         r'stormcheck\.\w+',
-        r'^\d+\|.*@',
+        r'base|seller|mix|non.?ref',
     ]
 
-    SEPARATORS = ['\t', '|', '/', ' ']
+    SEPARATORS = ['\t', '|', ',', ';', '/']
 
     @staticmethod
     def is_credit_card(value: str) -> bool:
-        """Check if a string is a valid credit card number"""
-        value = value.strip()
-        if not value.isdigit() or len(value) < 13 or len(value) > 19:
+        cleaned = re.sub(r'\s+', '', value.strip())
+        if not cleaned.isdigit() or len(cleaned) < 13 or len(cleaned) > 19:
             return False
-        return CardParser._luhn_check(value)
+        return CardParser._luhn_check(cleaned)
 
     @staticmethod
     def _luhn_check(card_number: str) -> bool:
-        """Validate credit card using Luhn algorithm"""
-        try:
-            digits = [int(d) for d in card_number]
-            checksum = 0
-            for i, d in enumerate(reversed(digits)):
-                if i % 2 == 1:
-                    d *= 2
-                    if d > 9:
-                        d -= 9
-                checksum += d
-            return checksum % 10 == 0
-        except (ValueError, AttributeError):
-            return False
+        digits = [int(d) for d in card_number]
+        checksum = 0
+        reverse = digits[::-1]
+        for i, digit in enumerate(reverse):
+            if i % 2 == 1:
+                digit *= 2
+                if digit > 9:
+                    digit -= 9
+            checksum += digit
+        return checksum % 10 == 0
 
     @staticmethod
     def is_valid_expiry(value: str) -> bool:
-        """Check if value is a valid expiry date"""
-        value = value.strip()
-        value = re.sub(r'[/\-\s]', '', value)
-
-        if len(value) == 2 and value.isdigit():
-            month = int(value)
+        cleaned = re.sub(r'[^0-9]', '', value.strip())
+        if len(cleaned) in (2, 4):
+            month = int(cleaned[:2])
             return 1 <= month <= 12
-
-        if len(value) == 4 and value.isdigit():
-            return True
-
         return False
 
     @staticmethod
     def is_valid_cvv(value: str) -> bool:
-        """Check if value is a valid CVV (3-4 digits)"""
-        value = value.strip()
-        return value.isdigit() and 3 <= len(value) <= 4
-
-    @staticmethod
-    def clean_field(value: str) -> str:
-        """Remove leading/trailing whitespace and special characters"""
-        value = value.strip()
-        value = ''.join(c for c in value if c.isprintable())
-        return value
+        cleaned = re.sub(r'[^0-9]', '', value.strip())
+        return cleaned.isdigit() and 3 <= len(cleaned) <= 4
 
     @staticmethod
     def should_skip_field(value: str) -> bool:
-        """Determine if a field should be skipped as junk"""
-        cleaned = CardParser.clean_field(value)
-
-        for pattern in CardParser.JUNK_PATTERNS:
-            if re.search(pattern, cleaned, re.IGNORECASE):
-                return True
-
-        if len(cleaned) < 2:
+        if not value or len(value.strip()) < 2:
             return True
-
+        for pattern in CardParser.JUNK_PATTERNS:
+            if re.search(pattern, value, re.IGNORECASE):
+                return True
         return False
 
     @classmethod
     def parse_card_line(cls, line: str) -> Optional[Dict[str, str]]:
-        """
-        Parse a single line of card data and extract card details.
-        """
         if not line or not line.strip():
             return None
 
-        fields = []
-
+        # Try splitting by multiple separators
         for sep in cls.SEPARATORS:
-            potential_fields = line.split(sep)
-            if len(potential_fields) > 2:
-                fields = potential_fields
+            if sep in line:
+                fields = [f.strip() for f in line.split(sep)]
                 break
+        else:
+            fields = [line.strip()]
 
-        if not fields:
-            return None
-
-        cleaned_fields = []
-        for field in fields:
-            cleaned = cls.clean_field(field)
-            if cleaned and not cls.should_skip_field(cleaned):
-                cleaned_fields.append(cleaned)
+        cleaned_fields = [f for f in fields if not cls.should_skip_field(f)]
 
         if len(cleaned_fields) < 3:
             return None
 
         card_data = {
-            'card': None,
-            'month': None,
-            'year': None,
-            'cvv': None,
-            'name': None,
-            'address': None,
-            'city': None,
-            'state': None,
-            'zipcode': None,
-            'country': None,
+            'card': None, 'month': None, 'year': None, 'cvv': None,
+            'name': None, 'address': None, 'city': None, 'state': None,
+            'zipcode': None, 'country': None, 'phone': None, 'email': None
         }
 
         for field in cleaned_fields:
             if cls.is_credit_card(field) and not card_data['card']:
                 card_data['card'] = field
-                continue
-
-            if cls.is_valid_expiry(field) and not card_data['month']:
-                expiry = re.sub(r'[/\-\s]', '', field.strip())
-                if len(expiry) == 2:
-                    card_data['month'] = expiry
-                elif len(expiry) == 4:
-                    card_data['month'] = expiry[:2]
-                    card_data['year'] = expiry[2:]
-                continue
-
-            if cls.is_valid_cvv(field) and not card_data['cvv']:
+            elif cls.is_valid_cvv(field) and not card_data['cvv']:
                 card_data['cvv'] = field
-                continue
-
-            if not card_data['year'] and len(field) == 2 and field.isdigit():
-                potential_year = int(field)
-                if 0 <= potential_year <= 99:
-                    card_data['year'] = field
-                    continue
-
-            if not card_data['name'] and len(field) > 2 and not field.isdigit():
+            elif cls.is_valid_expiry(field) and not card_data['month']:
+                exp = re.sub(r'[^0-9]', '', field)
+                card_data['month'] = exp[:2]
+                if len(exp) == 4:
+                    card_data['year'] = exp[2:]
+            elif len(field) == 2 and field.isdigit() and not card_data['year']:
+                card_data['year'] = field
+            elif not card_data['name'] and any(c.isalpha() for c in field):
                 card_data['name'] = field
-                continue
+            elif not card_data['address'] and any(c.isdigit() for c in field) and any(c.isalpha() for c in field):
+                card_data['address'] = field
+            elif not card_data['city'] and any(c.isalpha() for c in field):
+                card_data['city'] = field
+            elif re.match(r'^[A-Z]{2}$', field):
+                card_data['state'] = field
+            elif re.match(r'^\d{5,9}$', field):
+                card_data['zipcode'] = field
+            elif re.match(r'^[A-Z]{2}$', field.upper()):
+                card_data['country'] = field.upper()
 
-        # Validate minimum required fields
-        if not (card_data['card'] and card_data['month'] and card_data['cvv']):
+        if not all([card_data['card'], card_data['month'], card_data['cvv']]):
             return None
 
-        # Ensure year is 2 digits
-        if card_data['year'] and len(card_data['year']) == 4:
-            card_data['year'] = card_data['year'][2:]
+        if card_data['year'] is None:
+            card_data['year'] = "26"
 
         return card_data
 
     @classmethod
     def parse_multiple_cards(cls, text: str) -> List[Dict[str, str]]:
-        """Parse multiple card entries from text"""
         cards = []
-        lines = text.split('\n')
-
-        for line in lines:
+        for line in text.split('\n'):
             card = cls.parse_card_line(line)
             if card:
                 cards.append(card)
-
         return cards
 
+# ============================================================================
+# CARD FORMATTER
+# ============================================================================
 
 class CardFormatter:
-    """Format parsed card data according to selected format"""
-
     @staticmethod
-    def format_card(card_data: Dict[str, str], format_style: CardFormat) -> str:
-        """Format a single card according to the selected style"""
-        card = card_data.get('card', '')
-        month = card_data.get('month', '')
-        year = card_data.get('year', '')
-        cvv = card_data.get('cvv', '')
-        name = card_data.get('name', '')
-        address = card_data.get('address', '')
-        city = card_data.get('city', '')
-        state = card_data.get('state', '')
-        zipcode = card_data.get('zipcode', '')
-        country = card_data.get('country', '')
-
-        if month and not year:
-            year = "26"
-
-        try:
-            if format_style == CardFormat.FORMAT_1:
-                return f"{card} | {month} | {year} | {cvv}"
-            elif format_style == CardFormat.FORMAT_2:
-                return f"{card} | {month}/{year} | {cvv}"
-            elif format_style == CardFormat.FORMAT_3:
-                return f"{card} / {month} / {year} / {cvv}"
-            elif format_style == CardFormat.FORMAT_4:
-                return f"{card} / {month}{year} / {cvv}"
-            elif format_style == CardFormat.FORMAT_5:
-                return f"{card} | {month}{year} | {cvv}"
-            elif format_style == CardFormat.FORMAT_6:
-                parts = [card, month, year, cvv, name, address, city, state, zipcode, country]
-                parts = [p if p else "N/A" for p in parts]
-                return " | ".join(parts)
-        except Exception as e:
-            logger.error(f"Error formatting card: {e}")
-            return ""
-
+    def format_card(card_data: Dict[str, str], fmt: CardFormat) -> str:
+        c = card_data
+        if fmt == CardFormat.FORMAT_1:
+            return f"{c['card']} | {c['month']} | {c['year']} | {c['cvv']}"
+        elif fmt == CardFormat.FORMAT_2:
+            return f"{c['card']} | {c['month']}/{c['year']} | {c['cvv']}"
+        elif fmt == CardFormat.FORMAT_3:
+            return f"{c['card']} / {c['month']} / {c['year']} / {c['cvv']}"
+        elif fmt == CardFormat.FORMAT_4:
+            return f"{c['card']} / {c['month']}{c['year']} / {c['cvv']}"
+        elif fmt == CardFormat.FORMAT_5:
+            return f"{c['card']} | {c['month']}{c['year']} | {c['cvv']}"
+        elif fmt == CardFormat.FORMAT_6:
+            parts = [
+                c['card'], c['month'], c['year'], c['cvv'],
+                c.get('name', 'N/A'), c.get('address', 'N/A'),
+                c.get('city', 'N/A'), c.get('state', 'N/A'),
+                c.get('zipcode', 'N/A'), c.get('country', 'N/A')
+            ]
+            return " | ".join(parts)
         return ""
 
     @staticmethod
-    def format_cards(cards: List[Dict[str, str]], format_style: CardFormat) -> str:
-        """Format multiple cards"""
-        formatted = []
-        for card in cards:
-            formatted_card = CardFormatter.format_card(card, format_style)
-            if formatted_card:
-                formatted.append(formatted_card)
-
-        return "\n".join(formatted)
-
+    def format_cards(cards: List[Dict], fmt: CardFormat) -> str:
+        return "\n".join(CardFormatter.format_card(card, fmt) for card in cards)
 
 # ============================================================================
 # BOT HANDLERS
 # ============================================================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start command"""
-    welcome_text = (
-        "🎯 *Card Formatter Bot*\n\n"
-        "I can help you format messy credit card data into clean, usable formats.\n\n"
-        "*How to use:*\n"
-        "1. Send me raw card data (any format)\n"
-        "2. Choose your preferred output format\n"
-        "3. Get a formatted .txt file with all your cards\n\n"
-        "*What I can handle:*\n"
-        "✅ Multiple cards at once\n"
-        "✅ Mixed separators (pipes, tabs, spaces)\n"
-        "✅ Junk data and seller info (removed automatically)\n"
-        "✅ Various date formats\n\n"
-        "Use /format to see all available formats or /help for more info."
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🎯 <b>Card Formatter Bot</b>\n\n"
+        "Send me messy card data and I'll clean + format it for you.\n\n"
+        "Just paste your cards and choose a format.\n\n"
+        "Use /format to see all styles."
     )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
+async def show_formats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📋 <b>Available Formats:</b>\n\n"
+        "1️⃣ <code>card | month | year | cvv</code>\n"
+        "2️⃣ <code>card | month/year | cvv</code>\n"
+        "3️⃣ <code>card / month / year / cvv</code>\n"
+        "4️⃣ <code>card / MMYY / cvv</code>\n"
+        "5️⃣ <code>card | MMYY | cvv</code>\n"
+        "6️⃣ <b>Full Format</b> (with name & address)\n\n"
+        "<i>First send your raw card data, then choose a format.</i>"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        welcome_text,
-        parse_mode=ParseMode.MARKDOWN
+        "❓ <b>Help</b>\n\n"
+        "1. Paste your raw cards (any messy format)\n"
+        "2. Choose desired output format\n"
+        "3. Receive clean .txt file\n\n"
+        "I automatically remove prices, seller tags, 'LIVE =>', 'null', etc.",
+        parse_mode=ParseMode.HTML
     )
 
+async def receive_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    parsed = CardParser.parse_multiple_cards(text)
 
-async def show_formats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /format command"""
-    formats_text = (
-        "📋 *Available Formatting Styles:*\n\n"
-        "1️⃣  `4444555566667777 | 10 | 22 | 123`\n"
-        "2️⃣  `4444555566667777 | 10/22 | 123`\n"
-        "3️⃣  `4444555566667777 / 10 / 22 / 123`\n"
-        "4️⃣  `4444555566667777 / 1022 / 123`\n"
-        "5️⃣  `4444555566667777 | 1022 | 123`\n"
-        "6️⃣  Full format (includes name, address, etc.)\n\n"
-        "_First, paste your card data, then pick a format!_"
-    )
-
-    await update.message.reply_text(
-        formats_text,
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /help command"""
-    help_text = (
-        "❓ *Help & Usage*\n\n"
-        "*Basic Steps:*\n"
-        "1. Paste your card data (single card or multiple)\n"
-        "2. Click a format number button\n"
-        "3. Get your formatted cards in a .txt file\n\n"
-        "*Supported Input Formats:*\n"
-        "• Tab-separated values\n"
-        "• Pipe-separated values (|)\n"
-        "• Slash-separated values (/)\n"
-        "• Space-separated values\n"
-        "• Mixed formats\n\n"
-        "*Data I Extract:*\n"
-        "• Card number (16-19 digits)\n"
-        "• Expiry month & year\n"
-        "• CVV (3-4 digits)\n"
-        "• Name, address, city, state, zip\n\n"
-        "*Data I Remove:*\n"
-        "• Prices and amounts\n"
-        "• Seller tags (e.g., LIVE =>)\n"
-        "• Random dates\n"
-        "• Placeholder values (null, N/A, No)\n"
-        "• Junk and corrupted fields\n\n"
-        "Use /format to see all available output styles."
-    )
-
-    await update.message.reply_text(
-        help_text,
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-
-async def receive_cards(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming card data"""
-    if not update.message.text:
-        await update.message.reply_text("⚠️ Please send me card data as text.")
+    if not parsed:
+        await update.message.reply_text("❌ No valid cards found. Please check your data and try again.")
         return
 
-    context.user_data['card_text'] = update.message.text
-    parsed_cards = CardParser.parse_multiple_cards(update.message.text)
-
-    if not parsed_cards:
-        await update.message.reply_text(
-            "❌ Could not extract any valid cards from your data.\n\n"
-            "Make sure your data includes:\n"
-            "• Card number (16-19 digits)\n"
-            "• Expiry month (MM)\n"
-            "• CVV (3-4 digits)\n\n"
-            "Try again with different data."
-        )
-        return
-
-    context.user_data['parsed_cards'] = parsed_cards
-    card_count = len(parsed_cards)
+    context.user_data['parsed_cards'] = parsed
+    context.user_data['original_text'] = text
 
     keyboard = [
         [InlineKeyboardButton("1️⃣ card | month | year | cvv", callback_data="fmt_1")],
@@ -418,26 +261,64 @@ async def receive_cards(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         [InlineKeyboardButton("3️⃣ card / month / year / cvv", callback_data="fmt_3")],
         [InlineKeyboardButton("4️⃣ card / MMYY / cvv", callback_data="fmt_4")],
         [InlineKeyboardButton("5️⃣ card | MMYY | cvv", callback_data="fmt_5")],
-        [InlineKeyboardButton("6️⃣ Full format (all data)", callback_data="fmt_6")],
+        [InlineKeyboardButton("6️⃣ Full Format (Name + Address)", callback_data="fmt_6")],
     ]
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(
-        f"✅ Found *{card_count}* valid card(s)!\n\n"
-        "📋 Choose your formatting style:\n",
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN
+        f"✅ Successfully parsed <b>{len(parsed)}</b> card(s)!\n\n"
+        "Please choose output format:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML
     )
 
-
-async def format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle format selection"""
+async def format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    callback_data = query.data
-    format_enum = CardFormat.get_by_callback(callback_data)
+    fmt = CardFormat.get_by_callback(query.data)
+    if not fmt or 'parsed_cards' not in context.user_data:
+        await query.edit_message_text("❌ Error: Session expired. Please send cards again.")
+        return
 
-    if not format_enum:
-        await query.
+    cards = context.user_data['parsed_cards']
+    formatted_text = CardFormatter.format_cards(cards, fmt)
+
+    # Create file
+    bio = BytesIO()
+    bio.write(formatted_text.encode('utf-8'))
+    bio.seek(0)
+    bio.name = "formatted_cards.txt"
+
+    await query.edit_message_text(f"✅ Formatting with <b>{fmt.value[0]}</b>...\nGenerating file...")
+
+    await query.message.reply_document(
+        document=bio,
+        filename="formatted_cards.txt",
+        caption=f"✅ Here are your {len(cards)} formatted cards ({fmt.value[0]})"
+    )
+
+    # Clean up
+    context.user_data.clear()
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+def main():
+    if TOKEN == "YOUR_BOT_TOKEN_HERE":
+        logger.error("Please set your TELEGRAM_BOT_TOKEN environment variable!")
+        return
+
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("format", show_formats))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_cards))
+    app.add_handler(CallbackQueryHandler(format_selection))
+
+    logger.info("Card Formatter Bot is running...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
