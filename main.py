@@ -1,23 +1,4 @@
-"""
-Telegram Card Formatter Bot
-A robust, user-friendly bot for formatting messy credit card data.
 
-Features:
-- Intelligently parses credit card data from multiple formats
-- Supports 6 different output formatting styles
-- Handles multiple cards at once
-- Returns formatted results as a downloadable .txt file
-- Comprehensive error handling and logging
-
-Requirements:
-    python-telegram-bot>=20.0
-    
-Setup:
-    1. pip install python-telegram-bot
-    2. Get your bot token from @BotFather on Telegram
-    3. Set TOKEN environment variable or update it in the code
-    4. Run: python bot.py
-"""
 
 import logging
 import os
