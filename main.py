@@ -1,20 +1,40 @@
+"""
+Telegram Card Formatter Bot
+A robust, user-friendly bot for formatting messy credit card data.
+
+Features:
+- Intelligently parses credit card data from multiple formats
+- Supports 6 different output formatting styles
+- Handles multiple cards at once
+- Returns formatted results as a downloadable .txt file
+- Comprehensive error handling and logging
+
+Requirements:
+    python-telegram-bot>=20.0
+    
+Setup:
+    1. pip install python-telegram-bot
+    2. Get your bot token from @BotFather on Telegram
+    3. Set TOKEN environment variable or update it in the code
+    4. Run: python bot.py
+"""
 
 import logging
 import os
 import re
 import tempfile
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Optional
 from enum import Enum
+from io import BytesIO
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Document
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
     ContextTypes,
-    ConversationHandler,
     filters,
 )
 from telegram.constants import ParseMode
@@ -23,10 +43,8 @@ from telegram.constants import ParseMode
 # CONFIGURATION
 # ============================================================================
 
-# Get token from environment variable or set directly
 TOKEN = os.getenv("TOKEN", "YOUR_BOT_TOKEN_HERE")
 
-# Enable logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -43,12 +61,20 @@ SELECT_FORMAT, AWAITING_CARDS = range(2)
 
 class CardFormat(Enum):
     """Supported card formatting styles"""
-    FORMAT_1 = "4444555566667777 | 10 | 22 | 123"
-    FORMAT_2 = "4444555566667777 | 10/22 | 123"
-    FORMAT_3 = "4444555566667777 / 10 / 22 / 123"
-    FORMAT_4 = "4444555566667777 / 1022 / 123"
-    FORMAT_5 = "4444555566667777 | 1022 | 123"
-    FORMAT_6 = "4444555566667777 | 10 | 22 | 123 | FirstName | LastName | Address | City | State | Zip | Country"
+    FORMAT_1 = ("4444555566667777 | 10 | 22 | 123", "fmt_1")
+    FORMAT_2 = ("4444555566667777 | 10/22 | 123", "fmt_2")
+    FORMAT_3 = ("4444555566667777 / 10 / 22 / 123", "fmt_3")
+    FORMAT_4 = ("4444555566667777 / 1022 / 123", "fmt_4")
+    FORMAT_5 = ("4444555566667777 | 1022 | 123", "fmt_5")
+    FORMAT_6 = ("Full: card|month|year|cvv|name|address|city|state|zip|country", "fmt_6")
+
+    @classmethod
+    def get_by_callback(cls, callback_data: str):
+        """Get format enum by callback data"""
+        for fmt in cls:
+            if fmt.value[1] == callback_data:
+                return fmt
+        return None
 
 
 # ============================================================================
@@ -67,7 +93,7 @@ class CardParser:
         r'LIVE\s*=>',  # LIVE => tags
         r'\$\d+\.\d+',  # Dollar amounts
         r'^\d{4}_\d{2}_\d{2}',  # Dates like 2026_06_05
-        r'^(No|Yes|null|undefined|N/A)$',  # Generic placeholders
+        r'^(No|Yes|null|undefined|N/A|LIVE)$',  # Generic placeholders
         r'No\s+Checking',  # Bank type indicators
         r'stormcheck\.\w+',  # Seller tags
         r'^\d+\|.*@',  # Clear junk combinations
@@ -82,7 +108,6 @@ class CardParser:
         value = value.strip()
         if not value.isdigit() or len(value) < 13 or len(value) > 19:
             return False
-        # Luhn algorithm check (optional but good practice)
         return CardParser._luhn_check(value)
 
     @staticmethod
@@ -105,15 +130,13 @@ class CardParser:
     def is_valid_expiry(value: str) -> bool:
         """Check if value is a valid expiry date (MM, MM/YY, MM/YYYY, MMYY)"""
         value = value.strip()
-        # Remove common separators
         value = re.sub(r'[/\-\s]', '', value)
 
-        # Check various expiry formats
-        if len(value) == 2 and value.isdigit():  # MM only
+        if len(value) == 2 and value.isdigit():
             month = int(value)
             return 1 <= month <= 12
 
-        if len(value) == 4 and value.isdigit():  # MMYY or YYYY
+        if len(value) == 4 and value.isdigit():
             return True
 
         return False
@@ -128,7 +151,6 @@ class CardParser:
     def clean_field(value: str) -> str:
         """Remove leading/trailing whitespace and special characters"""
         value = value.strip()
-        # Remove control characters
         value = ''.join(c for c in value if c.isprintable())
         return value
 
@@ -137,12 +159,10 @@ class CardParser:
         """Determine if a field should be skipped as junk"""
         cleaned = CardParser.clean_field(value)
 
-        # Skip if matches junk patterns
         for pattern in CardParser.JUNK_PATTERNS:
             if re.search(pattern, cleaned, re.IGNORECASE):
                 return True
 
-        # Skip empty or very short fields
         if len(cleaned) < 2:
             return True
 
@@ -157,7 +177,6 @@ class CardParser:
         if not line or not line.strip():
             return None
 
-        # Try different separators
         fields = []
         separator_used = None
 
@@ -181,7 +200,7 @@ class CardParser:
         if len(cleaned_fields) < 3:
             return None
 
-        # Extract card data
+        # Initialize card data dictionary
         card_data = {
             'card': None,
             'month': None,
@@ -195,6 +214,7 @@ class CardParser:
             'country': None,
         }
 
+        # Extract card data
         idx = 0
         for field in cleaned_fields:
             # Try to identify field type
@@ -204,7 +224,6 @@ class CardParser:
                 continue
 
             if cls.is_valid_expiry(field) and not card_data['month']:
-                # Extract month and year
                 expiry = re.sub(r'[/\-\s]', '', field.strip())
                 if len(expiry) == 2:
                     card_data['month'] = expiry
@@ -219,11 +238,13 @@ class CardParser:
                 idx += 1
                 continue
 
-            # If we haven't extracted month/year and this looks like a year, try it
+            # If we haven't extracted year and this looks like a year
             if not card_data['year'] and len(field) == 2 and field.isdigit():
-                card_data['year'] = field
-                idx += 1
-                continue
+                potential_year = int(field)
+                if 0 <= potential_year <= 99:
+                    card_data['year'] = field
+                    idx += 1
+                    continue
 
             # Remaining fields are typically name, address, city, state, zip, country
             if not card_data['name'] and len(field) > 2 and not field.isdigit():
@@ -250,23 +271,9 @@ class CardParser:
         Handles both newline-separated and pipe-separated cards.
         """
         cards = []
-
-        # Try to split by newlines first
         lines = text.split('\n')
 
         for line in lines:
-            # Also try splitting by pipes to handle multi-card single-line format
-            if line.count('|') > 4:
-                potential_cards = line.split('|')
-                # Reconstruct potential card lines
-                temp_line = ""
-                for field in potential_cards:
-                    temp_line += field + "|"
-                    card = cls.parse_card_line(temp_line.rstrip('|'))
-                    if card and card['card']:
-                        cards.append(card)
-                        temp_line = ""
-
             card = cls.parse_card_line(line)
             if card:
                 cards.append(card)
@@ -418,15 +425,27 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def receive_cards(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle incoming card data"""
     if not update.message.text:
-        await update.message.reply_text(
-            "⚠️ Please send me card data as text."
-        )
+        await update.message.reply_text("⚠️ Please send me card data as text.")
         return SELECT_FORMAT
 
     # Store the card data
     context.user_data['card_text'] = update.message.text
 
+    # Parse cards to show count
+    parsed_cards = CardParser.parse_multiple_cards(update.message.text)
+
+    if not parsed_cards:
+        await update.message.reply_text(
+            "❌ Could not extract any valid cards from your data.\n\n"
+            "Make sure your data includes:\n"
+            "• Card number (16-19 digits)\n"
+            "• Expiry month (MM)\n"
+            "• CVV (3-4 digits)\n\n"
+            "Try again with different data."
+        )
+        return SELECT_FORMAT
+
     # Show format selection keyboard
     keyboard = [
-        [InlineKeyboardButton("1️⃣ card|month|year|cvv", callback_data="fmt_1")],
-        [InlineKeyboardButton("2️⃣ card|month/year|cvv", callback_data="fmt_2")
+        [InlineKeyboardButton("1️⃣ card | month | year | cvv", callback_data="fmt_1")],
+        [InlineKeyboardButton("2️⃣ card | month/year | cvv", callback_data="fmt_2")
