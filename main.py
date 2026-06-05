@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from typing import List, Dict, Optional
+from enum import Enum
 from io import BytesIO
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -56,20 +57,18 @@ class CardFormat(Enum):
 # ============================================================================
 
 class CardParser:
-    # More comprehensive junk patterns
     JUNK_PATTERNS = [
-        r'^\d+\.?\d*$',                    # prices like $3.30 or 3.30
-        r'^\d{4}_\d{2}_\d{2}.*',           # 2026_06_04_US_TR_CA
+        r'^\d+\.?\d*$',                    # prices like $ 3.30
+        r'^\d{4}[-_]\d{2}[-_]\d{2}.*',    # 2026_06_05_US_TR_CA or 2026-06-05
         r'LIVE\s*=>.*',
         r'^(No|Yes|null|undefined|N/A|LIVE|CHECKING)$',
         r'No\s+Checking',
         r'stormcheck\.\w+',
         r'base|seller|mix|non.?ref|vr55',
-        r'Dan\*\*\*l|mitchelldiaz4@gmail\.com',  # example masked names
-        r'\*\*\*',                         # masked words
+        r'\*\*\*',                         # masked names like Dan***l
     ]
 
-    SEPARATORS = ['\t', '|', ',', ';', '  ', '   ']
+    SEPARATORS = ['\t', '|', ',', ';']
 
     @staticmethod
     def is_credit_card(value: str) -> bool:
@@ -107,7 +106,6 @@ class CardParser:
     def should_skip_field(value: str) -> bool:
         if not value or len(value.strip()) < 2:
             return True
-
         cleaned = value.strip()
         for pattern in CardParser.JUNK_PATTERNS:
             if re.search(pattern, cleaned, re.IGNORECASE):
@@ -119,20 +117,9 @@ class CardParser:
         if not line or not line.strip():
             return None
 
-        # Split on multiple possible separators
-        for sep in cls.SEPARATORS:
-            if sep in line:
-                fields = re.split(r'\s{2,}|\t|\|', line)
-                break
-        else:
-            fields = re.split(r'\s{2,}|\t|\|', line)
-
-        # Clean and filter junk
-        cleaned_fields = []
-        for field in fields:
-            cleaned = field.strip()
-            if cleaned and not cls.should_skip_field(cleaned):
-                cleaned_fields.append(cleaned)
+        # Split on multiple spaces, tabs, or pipes
+        fields = re.split(r'\s{2,}|\t|\|', line)
+        cleaned_fields = [f.strip() for f in fields if f.strip() and not cls.should_skip_field(f.strip())]
 
         if len(cleaned_fields) < 3:
             return None
@@ -158,7 +145,7 @@ class CardParser:
             elif any(c.isalpha() for c in field):
                 if not card_data['name']:
                     card_data['name'] = field
-                elif not card_data['address']:
+                elif not card_data['address'] and any(d.isdigit() for d in field):
                     card_data['address'] = field
                 elif not card_data['city']:
                     card_data['city'] = field
@@ -166,12 +153,11 @@ class CardParser:
                     card_data['state'] = field.upper()
                 elif re.match(r'^\d{5,10}$', field):
                     card_data['zipcode'] = field
-            elif re.match(r'^\+?1?\(?\d{3}\)?', field):
-                card_data['phone'] = field
             elif '@' in field:
                 card_data['email'] = field
+            elif re.match(r'^\+?1?\(?\d', field):
+                card_data['phone'] = field
 
-        # Final validation
         if not all([card_data['card'], card_data['month'], card_data['cvv']]):
             return None
 
@@ -226,12 +212,7 @@ class CardFormatter:
 # ============================================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🎯 <b>Card Formatter Bot</b>\n\n"
-        "Send me any messy card data.\n"
-        "I will clean junk automatically and format it cleanly.\n\n"
-        "Use /format to see all available styles."
-    )
+    text = "🎯 <b>Card Formatter Bot</b>\n\nSend me your messy card data and choose a format."
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 async def show_formats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -242,18 +223,16 @@ async def show_formats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "3️⃣ <code>card / month / year / cvv</code>\n"
         "4️⃣ <code>card / MMYY / cvv</code>\n"
         "5️⃣ <code>card | MMYY | cvv</code>\n"
-        "6️⃣ <b>Full Format</b> — includes name, address, city, state, zip\n\n"
-        "<i>Paste your cards first, then choose a format.</i>"
+        "6️⃣ <b>Full Format</b> (Name + Address)\n\n"
+        "<i>Paste cards first, then select format.</i>"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❓ <b>Help</b>\n\n"
-        "• Paste raw card lines (one or many)\n"
-        "• I automatically remove prices, dates like 2026_06_04_US_TR_CA, "
-        "masked names, 'No Checking', seller tags, etc.\n"
-        "• Choose format → Receive clean .txt file",
+        "Paste any messy card data (with extra junk, prices, dates, etc.)\n"
+        "I will automatically clean it and return a clean .txt file.",
         parse_mode=ParseMode.HTML
     )
 
@@ -262,7 +241,7 @@ async def receive_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parsed = CardParser.parse_multiple_cards(text)
 
     if not parsed:
-        await update.message.reply_text("❌ Could not find any valid cards. Please send better formatted data.")
+        await update.message.reply_text("❌ Could not detect any valid cards. Try sending again.")
         return
 
     context.user_data['parsed_cards'] = parsed
@@ -277,8 +256,7 @@ async def receive_cards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await update.message.reply_text(
-        f"✅ Found <b>{len(parsed)}</b> valid card(s)!\n\n"
-        "Choose output format:",
+        f"✅ Found <b>{len(parsed)}</b> valid card(s)!\n\nChoose format:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.HTML
     )
@@ -289,7 +267,7 @@ async def format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     fmt = CardFormat.get_by_callback(query.data)
     if not fmt or 'parsed_cards' not in context.user_data:
-        await query.edit_message_text("❌ Session expired. Please send your cards again.")
+        await query.edit_message_text("❌ Session expired. Please send cards again.")
         return
 
     cards = context.user_data['parsed_cards']
@@ -300,12 +278,12 @@ async def format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bio.seek(0)
     bio.name = "formatted_cards.txt"
 
-    await query.edit_message_text(f"✅ Formatting using: <b>{fmt.value[0]}</b>")
+    await query.edit_message_text("✅ Generating file...")
 
     await query.message.reply_document(
         document=bio,
         filename="formatted_cards.txt",
-        caption=f"✅ {len(cards)} card(s) formatted successfully ({fmt.value[0]})"
+        caption=f"✅ {len(cards)} card(s) formatted successfully"
     )
 
     context.user_data.clear()
@@ -316,7 +294,7 @@ async def format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if TOKEN == "YOUR_BOT_TOKEN_HERE":
-        logger.error("Please set TELEGRAM_BOT_TOKEN environment variable!")
+        logger.error("Please set your TELEGRAM_BOT_TOKEN environment variable!")
         return
 
     app = Application.builder().token(TOKEN).build()
